@@ -6,18 +6,18 @@ import {
   CheckCircle2, Circle, X, DollarSign, Award, Users, 
   Plane, Thermometer, PieChart, Zap, BarChart3, Calculator, 
   Share2, Info, MapPin, Building2, Truck, BriefcaseBusiness,
-  CloudOff, ShieldAlert, Globe, Users2, ShieldCheck, Mail, LogOut
+  CloudOff, ShieldAlert, Globe, Users2, Download
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged,
-  GoogleAuthProvider, linkWithPopup, signInWithPopup, signOut
+  getAuth, signInAnonymously, onAuthStateChanged, 
+  GoogleAuthProvider, signInWithRedirect, getRedirectResult, linkWithRedirect
 } from 'firebase/auth';
 import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 
-// --- 🚀 TU FIREBASE CONFIGURACIÓN REAL (PRODUCCIÓN) ---
+// --- 🚀 TU FIREBASE CONFIGURACIÓN REAL ---
 const userFirebaseConfig = {
   apiKey: "AIzaSyC-YDie00IPgmhE4gOda8KiSjHTew595NA",
   authDomain: "rostermax-60242.firebaseapp.com",
@@ -28,13 +28,9 @@ const userFirebaseConfig = {
 };
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : userFirebaseConfig;
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const googleProvider = new GoogleAuthProvider();
-
-// Utilizamos un identificador base para tu proyecto
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'roster-max-production';
 
 export default function App() {
@@ -42,17 +38,18 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('roster'); 
   const [loading, setLoading] = useState(true);
-  const [authLoading, setAuthLoading] = useState(false);
   const [theme, setTheme] = useState('dark'); 
   const [premiumView, setPremiumView] = useState(false); 
   const [addMethod, setAddMethod] = useState('manual');
   
-  // Offline & Admin States
+  // States: Offline, Admin, PWA
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminVault, setShowAdminVault] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
   const [vaultError, setVaultError] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null); // NUEVO: Estado para PWA
+  const [authMsg, setAuthMsg] = useState('');
   
   // Data States
   const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0] });
@@ -64,72 +61,90 @@ export default function App() {
   const [targetDate, setTargetDate] = useState('');
   const [calcInvestment, setCalcInvestment] = useState({ amount: 1000, years: 5 });
 
-  // --- GLOBAL LISTENERS (OFFLINE MODE) ---
+  // --- LISTENERS: OFFLINE & PWA INSTALL ---
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Captura el evento de instalación nativo
+    const handleBeforeInstallPrompt = (e) => {
+      e.preventDefault(); // Evita que Chrome muestre el mini-infobar abajo
+      setInstallPrompt(e); // Guarda el evento para nuestro botón
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   }, []);
 
-  // --- AUTHENTICATION ---
+  // --- AUTHENTICATION ENGINE (REDIRECT SAFE) ---
   useEffect(() => {
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
+        // Manejar el retorno de Google de forma segura para PWA
+        const result = await getRedirectResult(auth);
+        if (result) {
+          console.log("Sesión de Google exitosa");
+          setAuthMsg("Cuenta enlazada exitosamente.");
         }
-      } catch (error) { 
-        console.error("Auth error:", error);
-        try { await signInAnonymously(auth); } catch (e) { console.error(e); }
+      } catch (error) {
+        console.error("Error al retornar de Google:", error);
+        if (error.code === 'auth/credential-already-in-use') {
+           setAuthMsg("Este correo ya está registrado. Inicia sesión directamente.");
+        }
       }
     };
+    
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setLoading(false);
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+        setLoading(false);
+      } else {
+        // Si no hay nadie logueado, crear cuenta temporal (Invitado)
+        try {
+          await signInAnonymously(auth);
+        } catch (err) { console.error("Error anon auth", err); }
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // --- GOOGLE AUTH LOGIC ---
-  const linkGoogleAccount = async () => {
-    if (!user) return;
-    setAuthLoading(true);
-    try {
-      if (user.isAnonymous) {
-        // Vincula la cuenta anónima actual con Google para no perder los datos
-        await linkWithPopup(user, googleProvider);
-        alert("¡Cuenta asegurada! Tus datos se han guardado de forma permanente.");
-      } else {
-        await signInWithPopup(auth, googleProvider);
-      }
-    } catch (error) {
-      console.error("Error Auth:", error);
-      if (error.code === 'auth/credential-already-in-use') {
-        alert("Este correo ya tiene una cuenta. Iniciando sesión...");
-        await signInWithPopup(auth, googleProvider);
-      }
-    } finally {
-      setAuthLoading(false);
+  // --- PWA INSTALL HANDLER ---
+  const handleInstallClick = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt(); // Muestra el cartel nativo del sistema
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null); // Oculta nuestro botón si aceptó
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut(auth);
-    window.location.reload();
+  // --- GOOGLE LINK HANDLER (PWA SAFE) ---
+  const linkWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      if (user && user.isAnonymous) {
+        // Convierte la cuenta temporal en permanente usando Redirección
+        await linkWithRedirect(user, provider);
+      } else {
+        await signInWithRedirect(auth, provider);
+      }
+    } catch (error) {
+      console.error("Error iniciando Google Auth", error);
+      setAuthMsg("Error al iniciar conexión segura.");
+    }
   };
 
   // --- DATA FETCHING ---
   useEffect(() => {
     if (!user) return;
-    
     const unsubRoster = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), (docSnap) => {
       if (docSnap.exists()) setRosterConfig(docSnap.data());
       else setDoc(docSnap.ref, rosterConfig);
@@ -185,16 +200,6 @@ export default function App() {
   const currentStatus = useMemo(() => getStatusForDate(new Date().toISOString().split('T')[0], rosterConfig), [rosterConfig]);
   const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
 
-  // --- LOGIC: LIFE BALANCE STATS ---
-  const lifeBalanceStats = useMemo(() => {
-    const cycle = rosterConfig.workDays + rosterConfig.restDays;
-    const workPercent = (rosterConfig.workDays / cycle) * 100;
-    const restPercent = (rosterConfig.restDays / cycle) * 100;
-    const estimatedWorkDaysYear = Math.round((workPercent / 100) * 365);
-    const estimatedRestDaysYear = Math.round((restPercent / 100) * 365);
-    return { workPercent, restPercent, estimatedWorkDaysYear, estimatedRestDaysYear };
-  }, [rosterConfig]);
-
   // --- EASTER EGG: BÓVEDA CEO ---
   const [clickCount, setClickCount] = useState(0);
   const handleLogoClick = () => {
@@ -219,7 +224,7 @@ export default function App() {
     }
   };
 
-  // --- HANDLERS ---
+  // --- HANDLERS BASES DE DATOS ---
   const updateRoster = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -243,9 +248,7 @@ export default function App() {
 
   const addGenericDoc = async (e, collectionName, fields) => {
     e.preventDefault();
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), {
-      ...fields, createdAt: new Date().toISOString()
-    });
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { ...fields, createdAt: new Date().toISOString() });
     e.target.reset();
   };
   
@@ -287,19 +290,19 @@ export default function App() {
     return <BriefcaseBusiness size={24} className="text-indigo-400 mb-2"/>; 
   };
 
+  const isAnonymous = user?.isAnonymous;
+
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>;
 
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${themeClasses[theme]}`}>
       
-      {/* OFFLINE INDICATOR */}
       {isOffline && (
         <div className="bg-amber-500 text-slate-900 text-[10px] font-bold px-4 py-1.5 flex justify-center items-center uppercase tracking-widest z-50 relative">
           <CloudOff size={12} className="mr-2" /> Trabajando sin conexión
         </div>
       )}
 
-      {/* CEO VAULT MODAL */}
       {showAdminVault && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-sm animate-in zoom-in-95 shadow-2xl">
@@ -309,33 +312,40 @@ export default function App() {
             </div>
             <form onSubmit={handleVaultSubmit}>
               <input type="password" autoFocus placeholder="Contraseña" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className={`w-full rounded-xl px-4 py-3 mb-2 outline-none border bg-slate-950 text-white ${vaultError ? 'border-red-500' : 'border-slate-700 focus:border-amber-500'}`} />
-              <button type="submit" className="w-full mt-2 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl hover:bg-amber-400">Desbloquear Bóveda</button>
+              {vaultError && <p className="text-xs text-red-500 mb-4">Contraseña incorrecta.</p>}
+              <button type="submit" className="w-full mt-2 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl hover:bg-amber-400 transition-colors">Desbloquear Bóveda</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* Header */}
       <header className={`sticky top-0 z-40 px-4 py-4 border-b ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/80 border-slate-800'} backdrop-blur-md`}>
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div className="flex items-center space-x-2 cursor-pointer select-none" onClick={handleLogoClick}>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20"><span className="font-bold text-white">R</span></div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-500 to-teal-400 bg-clip-text text-transparent">RosterMax</h1>
           </div>
-          <button onClick={() => setActiveTab('settings')} className={`w-8 h-8 rounded-full border flex items-center justify-center overflow-hidden ${theme === 'light' ? 'border-slate-300' : 'border-slate-700 bg-slate-800'} ${isAdmin ? 'ring-2 ring-amber-500 border-amber-500' : ''}`}>
-            {user && !user.isAnonymous && user.photoURL ? (
-              <img src={user.photoURL} alt="Profile" className="w-full h-full object-cover" />
-            ) : isAdmin ? (
-              <ShieldAlert size={16} className="text-amber-500" />
-            ) : (
-              <User size={16} className={textMuted} />
-            )}
+          <button onClick={() => setActiveTab('settings')} className={`w-8 h-8 rounded-full border flex items-center justify-center transition-colors ${theme === 'light' ? 'border-slate-300' : 'border-slate-700 bg-slate-800'} ${isAdmin ? 'ring-2 ring-amber-500 border-amber-500' : ''}`}>
+            {isAdmin ? <ShieldAlert size={16} className="text-amber-500" /> : <User size={16} className={textMuted} />}
           </button>
         </div>
       </header>
 
       <main className="max-w-md mx-auto p-4 space-y-6">
         
+        {/* BANNER DE INSTALACIÓN NATIVO UI/UX */}
+        {installPrompt && (
+          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4">
+            <div>
+              <p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p>
+              <p className={`text-xs mt-0.5 ${textMuted}`}>Añade la app a tu pantalla de inicio.</p>
+            </div>
+            <button onClick={handleInstallClick} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-xl text-sm transition-colors shadow-lg shadow-emerald-500/30">
+              Instalar
+            </button>
+          </div>
+        )}
+
         {/* TAB 1: ROSTER */}
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -357,23 +367,18 @@ export default function App() {
             {userProfile.location?.toLowerCase().includes('neuquén') && (
               <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative">
                  <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
-                 <div className="relative z-10">
-                   <p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Target size={10} className="mr-1"/> Sponsor Exclusivo Vaca Muerta</p>
-                   <p className="font-bold text-white text-sm">20% Off Service Amarok/Hilux</p>
-                 </div>
+                 <div className="relative z-10"><p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Target size={10} className="mr-1"/> Sponsor Exclusivo Vaca Muerta</p><p className="font-bold text-white text-sm">20% Off Service Amarok/Hilux</p><p className="text-xs text-blue-200 mt-0.5">En Neuquén Capital.</p></div>
                  <ChevronRight className="text-blue-400 relative z-10"/>
               </div>
             )}
 
             <div className={`grid grid-cols-2 gap-4`}>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
-                 <Thermometer size={24} className="text-amber-500 mb-2"/>
-                 <span className="text-2xl font-bold">14°C</span>
-                 <span className={`text-xs font-bold mt-1 max-w-full truncate px-2`} title={userProfile.location || 'Sin Ubicación'}>{userProfile.location || 'Ubicación...'}</span>
+                 <Thermometer size={24} className="text-amber-500 mb-2"/><span className="text-2xl font-bold">14°C</span>
+                 <span className={`text-xs font-bold mt-1 max-w-full truncate px-2`} title={userProfile.location || 'Sin Ubicación'}>{userProfile.location || 'Ubicación...'}</span><span className={`text-[9px] ${textMuted}`}>Pronóstico Local</span>
                </div>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
-                 {getTransportIcon(userProfile.transport)}
-                 <span className="text-sm font-bold">En {currentStatus?.daysLeftInPhase} días</span>
+                 {getTransportIcon(userProfile.transport)}<span className="text-sm font-bold">En {currentStatus?.daysLeftInPhase} días</span>
                  <span className={`text-[10px] uppercase font-bold mt-1 text-indigo-400`}>{userProfile.transport || 'Transporte'}</span>
                </div>
             </div>
@@ -399,12 +404,15 @@ export default function App() {
         {/* TAB 2: CREW */}
         {activeTab === 'crew' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <div><h2 className="text-2xl font-bold flex items-center">Tu Equipo <Users className="ml-2 text-blue-500" size={24}/></h2></div>
+            <div><h2 className="text-2xl font-bold flex items-center">Tu Equipo <Users className="ml-2 text-blue-500" size={24}/></h2><p className={`text-sm ${textMuted}`}>Organiza salidas cruzando diagramas.</p></div>
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-blue-500 relative overflow-hidden`}>
+              <div className="absolute -right-4 -top-4 opacity-10"><Search size={80} className="text-blue-500"/></div>
               <h3 className="font-bold flex items-center mb-1"><Search size={18} className="mr-2 text-blue-500"/> Proyector de Equipo</h3>
-              <input type="date" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 border ${inputBg} mt-2 mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
+              <p className={`text-[11px] mb-4 ${textMuted} relative z-10`}>Selecciona una fecha para ver tu estado y el de tus compañeros.</p>
+              <input type="date" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 border ${inputBg} mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
               {targetDate && (
                 <div className="space-y-2 relative z-10">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Estado el {new Date(targetDate).toLocaleDateString()}:</h4>
                   {targetStatus && (
                     <div className={`p-3 rounded-lg border flex justify-between items-center shadow-sm ${targetStatus.isWorking ? (theme==='light'?'bg-amber-50 border-amber-200':'bg-amber-500/10 border-amber-500/30') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30')}`}>
                       <span className="font-semibold text-sm flex items-center"><User size={14} className="mr-1.5 opacity-70"/> Tú</span>
@@ -416,8 +424,8 @@ export default function App() {
                     if (!status) return null;
                     const isCoincidence = !targetStatus?.isWorking && !status.isWorking;
                     return (
-                      <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center ${status.isWorking ? (theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800/40 border-slate-700') : (isCoincidence ? (theme==='light'?'bg-emerald-100 border-emerald-300':'bg-emerald-500/20 border-emerald-500') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30'))}`}>
-                        <span className="font-semibold text-sm flex items-center">{friend.name} {isCoincidence && <Zap size={14} className="ml-1 text-yellow-500 fill-yellow-500"/>}</span>
+                      <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center transition-all ${status.isWorking ? (theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800/40 border-slate-700') : (isCoincidence ? (theme==='light'?'bg-emerald-100 border-emerald-300 shadow-md':'bg-emerald-500/20 border-emerald-500 shadow-md shadow-emerald-500/10') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30'))}`}>
+                        <span className="font-semibold text-sm flex items-center">{friend.name} {isCoincidence && <Zap size={14} className="ml-1 text-yellow-500 fill-yellow-500 animate-pulse"/>}{friend.isSynced && <Share2 size={12} className="ml-1.5 text-blue-400" title="Sincronizado"/>}</span>
                         <span className={`text-xs font-bold px-2 py-1 rounded ${status.isWorking ? 'text-slate-500' : (isCoincidence ? 'text-emerald-700 bg-emerald-400/30' : 'text-emerald-500')}`}>{status.isWorking ? 'Trabajando' : (isCoincidence ? '¡COINCIDEN!' : 'De Franco')}</span>
                       </div>
                     )
@@ -425,7 +433,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            
             <div className={`rounded-2xl border overflow-hidden ${cardClasses[theme]}`}>
               <div className="flex border-b border-inherit">
                  <button onClick={() => setAddMethod('manual')} className={`flex-1 py-3 text-sm font-bold transition-colors ${addMethod === 'manual' ? 'bg-blue-500/10 text-blue-500 border-b-2 border-b-blue-500' : textMuted}`}>Carga Manual</button>
@@ -433,20 +440,19 @@ export default function App() {
               </div>
               <div className="p-5">
                 {addMethod === 'manual' ? (
-                  <form onSubmit={(e) => addGenericDoc(e, 'friends', { name: e.target.elements.name.value, workDays: parseInt(e.target.elements.w.value), restDays: parseInt(e.target.elements.r.value), startDate: e.target.elements.start.value, isSynced: false })} className="space-y-3">
-                    <input name="name" type="text" placeholder="Nombre (ej. Juan Pérez)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                    <div className="flex space-x-2"><input name="w" type="number" placeholder="Días Trabajo" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /><input name="r" type="number" placeholder="Días Descanso" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></div>
-                    <div><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
-                    <button type="submit" className="w-full bg-slate-800 text-white hover:bg-slate-700 font-bold py-2.5 rounded-xl border border-slate-700 transition-colors mt-2">Guardar Manualmente</button>
+                  <form onSubmit={(e) => addGenericDoc(e, 'friends', { name: e.target.elements.name.value, workDays: parseInt(e.target.elements.w.value), restDays: parseInt(e.target.elements.r.value), startDate: e.target.elements.start.value, isSynced: false })} className="space-y-3 animate-in fade-in">
+                    <input name="name" type="text" placeholder="Nombre" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                    <div className="flex space-x-2"><input name="w" type="number" placeholder="Trabajo" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /><input name="r" type="number" placeholder="Descanso" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></div>
+                    <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida</label><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
+                    <button type="submit" className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl border border-slate-700 transition-colors mt-2">Guardar Manualmente</button>
                   </form>
                 ) : (
-                  <form onSubmit={handleSyncAdd} className="space-y-4">
-                    <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-8X492A" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
+                  <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
+                    <div className="relative"><input name="syncCode" type="text" placeholder="RM-XXXXX" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
                   </form>
                 )}
               </div>
             </div>
-            
             <div className="space-y-2">
                {friends.map(friend => (
                  <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
@@ -461,7 +467,7 @@ export default function App() {
         {/* TAB 3: PLANNER */}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <div><h2 className="text-2xl font-bold">Planificador de Franco</h2></div>
+            <div><h2 className="text-2xl font-bold">Planificador de Franco</h2><p className={`text-sm ${textMuted}`}>Organiza tus días libres.</p></div>
             <form onSubmit={(e) => addGenericDoc(e, 'tasks', { title: e.target.elements.title.value, completed: false })} className="flex space-x-2">
               <input name="title" type="text" placeholder="Ej. Turno médico..." className={`flex-1 rounded-xl px-4 py-3 outline-none border shadow-sm ${inputBg}`} required/>
               <button type="submit" className="bg-emerald-500 hover:bg-emerald-400 text-white p-3 rounded-xl shadow-lg shadow-emerald-500/20 active:scale-95"><Plus size={24}/></button>
@@ -481,13 +487,13 @@ export default function App() {
         {activeTab === 'wealth' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="flex justify-between items-end">
-              <div><h2 className="text-2xl font-bold flex items-center">Finanzas <TrendingUp className="ml-2 text-emerald-500" size={24}/></h2></div>
+              <div><h2 className="text-2xl font-bold flex items-center">Finanzas <TrendingUp className="ml-2 text-emerald-500" size={24}/></h2><p className={`text-sm ${textMuted}`}>Protege tu capital.</p></div>
               <button onClick={() => setPremiumView(!premiumView)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center ${premiumView ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/30' : (theme === 'light' ? 'bg-white text-indigo-500 border-indigo-200' : 'bg-slate-900 text-indigo-400 border-indigo-500/30')}`}>
                  {premiumView ? <Target size={14} className="mr-1"/> : <BarChart3 size={14} className="mr-1"/>} {premiumView ? 'Ver Metas' : 'Inversiones PRO'}
               </button>
             </div>
             {!premiumView ? (
-              <div className="space-y-6">
+              <div className="space-y-6 animate-in fade-in">
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
                   <form onSubmit={(e) => { e.preventDefault(); addGenericDoc(e, 'goals', { title: e.target.elements.title.value, target: parseFloat(e.target.elements.target.value), current: 0 }); }} className="space-y-3">
                     <div className="flex space-x-2"><input name="title" type="text" placeholder="Ej. Terreno" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /><input name="target" type="number" placeholder="$" className={`w-24 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></div>
@@ -515,11 +521,12 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-4 animate-in slide-in-from-left-4">
                  <div className="bg-gradient-to-br from-indigo-600 to-blue-800 rounded-2xl p-5 text-white shadow-xl shadow-indigo-900/20 relative overflow-hidden">
                     <div className="absolute right-0 top-0 opacity-10"><TrendingUp size={100} /></div>
                     <h3 className="font-black text-lg mb-1 flex items-center"><Award size={18} className="mr-2 text-yellow-400"/> Portafolios Recomendados</h3>
-                    <div className="space-y-3 relative z-10 mt-4">
+                    <p className="text-xs text-indigo-100 mb-4 opacity-80">Rendimientos históricos en USD.</p>
+                    <div className="space-y-3 relative z-10">
                       <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20 flex justify-between items-center"><div><p className="font-bold text-sm">S&P 500 (SPY)</p><p className="text-[10px] text-indigo-200">Riesgo Moderado</p></div><div className="text-right"><p className="font-black text-emerald-400">+10.5%</p><p className="text-[10px] text-indigo-200">Anualizado</p></div></div>
                       <div className="bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20 flex justify-between items-center"><div><p className="font-bold text-sm">ETF Energía (XLE)</p><p className="text-[10px] text-indigo-200">Sectorial / Alto Riesgo</p></div><div className="text-right"><p className="font-black text-emerald-400">+14.2%</p><p className="text-[10px] text-indigo-200">Anualizado</p></div></div>
                     </div>
@@ -542,55 +549,22 @@ export default function App() {
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <h2 className="text-2xl font-bold">Perfil & Estadísticas</h2>
             
-            {/* NUEVO: MÓDULO DE SEGURIDAD Y GOOGLE */}
-            <div className={`rounded-2xl border p-5 space-y-4 ${cardClasses[theme]} border-l-4 border-l-emerald-500`}>
-              <h3 className="font-bold flex items-center text-emerald-500">
-                <ShieldCheck size={18} className="mr-2"/> Cuenta y Seguridad
+            {/* SEGURIDAD DE LA CUENTA (GOOGLE REDIRECT) */}
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} ${isAnonymous ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+              <h3 className="font-bold flex items-center mb-2">
+                {isAnonymous ? <AlertCircle size={18} className="mr-2 text-amber-500"/> : <CheckCircle2 size={18} className="mr-2 text-emerald-500"/>}
+                Estado de la Cuenta
               </h3>
-              
-              {user?.isAnonymous ? (
-                <div className="space-y-4">
-                  <p className={`text-sm leading-relaxed ${textMuted}`}>
-                    Estás usando una cuenta temporal. Si cambias de teléfono o borras el historial, perderás tu diagrama.
-                  </p>
-                  <button 
-                    onClick={linkGoogleAccount}
-                    disabled={authLoading}
-                    className="w-full bg-white text-slate-800 hover:bg-slate-50 font-bold py-3 rounded-xl border border-slate-200 shadow-sm transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
-                  >
-                    {authLoading ? (
-                      <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-slate-800"></div>
-                    ) : (
-                      <>
-                        <svg className="w-5 h-5" viewBox="0 0 24 24">
-                          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-                        </svg>
-                        <span>Vincular con Google</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className={`flex items-center space-x-3 p-3 rounded-xl border ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-950/50 border-slate-800'}`}>
-                    {user?.photoURL ? (
-                      <img src={user.photoURL} alt="Profile" className="w-10 h-10 rounded-full border border-slate-700" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-500"><User size={20}/></div>
-                    )}
-                    <div className="overflow-hidden">
-                      <p className="font-bold text-sm truncate">{user?.displayName || 'Usuario Activo'}</p>
-                      <p className={`text-xs truncate ${textMuted}`}>{user?.email}</p>
-                    </div>
-                  </div>
-                  <button onClick={handleSignOut} className="w-full py-2.5 rounded-xl border border-red-500/20 text-red-500 text-sm font-bold flex items-center justify-center hover:bg-red-500/10 transition-colors">
-                    <LogOut size={16} className="mr-2"/> Cerrar Sesión
-                  </button>
-                </div>
+              <p className={`text-xs mb-4 ${textMuted}`}>
+                {isAnonymous ? "Tu cuenta es temporal. Si limpias el navegador, perderás tus datos." : `Conectado como ${user?.email}`}
+              </p>
+              {isAnonymous && (
+                <button onClick={linkWithGoogle} className="w-full flex items-center justify-center bg-white text-slate-900 border border-slate-200 font-bold py-2.5 rounded-xl transition-all shadow-sm">
+                  <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                  Vincular con Google
+                </button>
               )}
+              {authMsg && <p className="text-[10px] mt-2 font-bold text-center text-emerald-500">{authMsg}</p>}
             </div>
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
@@ -651,23 +625,34 @@ export default function App() {
                <h2 className="text-2xl font-black text-amber-500 flex items-center"><ShieldAlert className="mr-2"/> Centro de Mando</h2>
                <p className={`text-sm ${textMuted}`}>Métricas globales de tu negocio.</p>
              </div>
+
              <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}><Users2 size={24} className="text-blue-500 mb-2"/><span className="text-3xl font-black">5,204</span></div>
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}><DollarSign size={24} className="text-emerald-500 mb-2"/><span className="text-3xl font-black">$12.4k</span></div>
+                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}>
+                  <Users2 size={24} className="text-blue-500 mb-2"/>
+                  <span className="text-3xl font-black">5,204</span>
+                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Usuarios Activos</p>
+                </div>
+                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}>
+                  <DollarSign size={24} className="text-emerald-500 mb-2"/>
+                  <span className="text-3xl font-black">$12.4k</span>
+                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Proyección Mensual</p>
+                </div>
              </div>
+
              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
                <h3 className="font-bold flex items-center mb-4 text-amber-500"><Target size={18} className="mr-2"/> Smart Ad Engine</h3>
-               <form className="space-y-3">
-                 <input type="text" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} />
-                 <input type="text" placeholder="Locación Objetivo (Ej. Neuquén)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} />
-                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-2 rounded-xl text-sm">Lanzar Campaña Segmentada</button>
+               <form onSubmit={(e) => { e.preventDefault(); alert("En producción inyectará el banner a la base de datos."); }} className="space-y-3">
+                 <input name="adCompany" type="text" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                 <input name="adTitle" type="text" placeholder="Título (Ej. 20% Off Pastillas)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                 <input name="adLocation" type="text" placeholder="Locación Objetivo (Ej. Neuquén)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-2 rounded-xl text-sm hover:bg-amber-400 transition-colors">Lanzar Campaña Segmentada</button>
                </form>
              </div>
           </div>
         )}
+
       </main>
 
-      {/* BOTTOM NAVIGATION */}
       <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'} backdrop-blur-xl`}>
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">
           <button onClick={() => setActiveTab('roster')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'roster' ? 'text-emerald-500' : textMuted}`}><Calendar size={20} /><span className="text-[9px] font-bold">Roster</span></button>
@@ -675,9 +660,16 @@ export default function App() {
           <button onClick={() => setActiveTab('planner')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'planner' ? 'text-emerald-500' : textMuted}`}><CheckSquare size={20} /><span className="text-[9px] font-bold">Franco</span></button>
           <button onClick={() => setActiveTab('wealth')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'wealth' ? 'text-emerald-500' : textMuted}`}><TrendingUp size={20} /><span className="text-[9px] font-bold">Finanzas</span></button>
           <button onClick={() => setActiveTab('settings')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'settings' ? 'text-emerald-500' : textMuted}`}><User size={20} /><span className="text-[9px] font-bold">Perfil</span></button>
-          {isAdmin && <button onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'admin' ? 'text-amber-500' : textMuted}`}><ShieldAlert size={20} /><span className="text-[9px] font-bold">CEO</span></button>}
+          
+          {isAdmin && (
+            <button onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'admin' ? 'text-amber-500' : textMuted}`}>
+              <ShieldAlert size={20} className={activeTab === 'admin' ? 'fill-amber-500/20' : ''}/>
+              <span className="text-[9px] font-bold">CEO</span>
+            </button>
+          )}
         </div>
       </nav>
+
     </div>
   );
 }
