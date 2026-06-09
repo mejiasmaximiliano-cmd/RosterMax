@@ -10,7 +10,6 @@ import {
   Megaphone
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
@@ -18,7 +17,6 @@ import {
 } from 'firebase/auth';
 import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
 
-// --- 🚀 FIREBASE CONFIGURACIÓN ---
 const firebaseConfig = {
   apiKey: "AIzaSyC-YDie00IPgmhE4gOda8KiSjHTew595NA",
   authDomain: "rostermax-60242.firebaseapp.com",
@@ -34,7 +32,6 @@ const db = getFirestore(app);
 const appId = 'roster-max-production';
 
 export default function App() {
-  // --- STATES ---
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('roster'); 
   const [loading, setLoading] = useState(true);
@@ -51,7 +48,8 @@ export default function App() {
   const [vaultError, setVaultError] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
-  const [realUserCount, setRealUserCount] = useState(0);
+  
+  const [userStats, setUserStats] = useState({ total: 0, linked: 0 }); // NUEVO ESTADO CEO
   const [demographics, setDemographics] = useState({ home: {}, site: {} });
   
   // Data States
@@ -65,7 +63,6 @@ export default function App() {
   const [calcInvestment, setCalcInvestment] = useState({ amount: 1000, years: 5 });
   const [currentAd, setCurrentAd] = useState(null);
 
-  // API States
   const [weatherData, setWeatherData] = useState({ temp: '--', loading: false });
   const [marketData, setMarketData] = useState({ 
     SPY: { price: '...', change: '...' }, 
@@ -74,13 +71,11 @@ export default function App() {
     PAM: { price: '...', change: '...' }
   });
 
-  // --- SISTEMA DE NOTIFICACIONES (TOAST) ---
   const showToast = (message) => {
     setToast(message);
     setTimeout(() => setToast(''), 3000);
   };
 
-  // --- ESCUDO ANTI-AMNESIA & PWA ---
   useEffect(() => {
     document.body.classList.add('overscroll-none');
     
@@ -102,14 +97,15 @@ export default function App() {
     };
   }, []);
 
-  // --- MOTOR DE AUTENTICACIÓN (POPUP SEGURO) ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
         setLoading(false);
+        // Guardamos si es anónimo o no en el registro público
         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', currentUser.uid), {
-          lastLogin: new Date().toISOString()
+          lastLogin: new Date().toISOString(),
+          isAnonymous: currentUser.isAnonymous
         }, { merge: true }).catch(()=>{});
       } else {
         try { await signInAnonymously(auth); } catch (err) { console.error(err); }
@@ -118,9 +114,8 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const isPermanentlyLinked = user && !user.isAnonymous;
+  const isPermanentlyLinked = user && !user.isAnonymous && user.email;
 
-  // --- BASE DE DATOS (SYNC PRIVADO Y PÚBLICO) ---
   useEffect(() => {
     if (!user) return;
     const unsubRoster = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), (d) => { if (d.exists()) setRosterConfig(d.data()); });
@@ -139,28 +134,29 @@ export default function App() {
     return () => { unsubRoster(); unsubProfile(); unsubTheme(); unsubTasks(); unsubGoals(); unsubLogs(); unsubFriends(); unsubAds(); };
   }, [user]);
 
-  // --- OBTENER DATOS DEL CEO (USUARIOS Y DEMOGRAFÍA) ---
   useEffect(() => {
     if (!isAdmin) return;
     const fetchUsers = async () => {
       try {
         const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'));
-        setRealUserCount(snap.size);
-        
+        let linkedCount = 0;
         let homeStats = {};
         let siteStats = {};
+        
         snap.docs.forEach(d => {
           const data = d.data();
+          if (!data.isAnonymous) linkedCount++;
           if (data.homeProvince) homeStats[data.homeProvince] = (homeStats[data.homeProvince] || 0) + 1;
           if (data.siteProvince) siteStats[data.siteProvince] = (siteStats[data.siteProvince] || 0) + 1;
         });
+        
+        setUserStats({ total: snap.size, linked: linkedCount });
         setDemographics({ home: homeStats, site: siteStats });
-      } catch (e) { console.log("Error contando usuarios", e); }
+      } catch (e) { console.log("Error contando usuarios"); }
     };
     fetchUsers();
   }, [isAdmin]);
 
-  // --- MOTOR CLIMÁTICO REAL (Open-Meteo) ---
   useEffect(() => {
     const fetchWeather = async () => {
       if (!userProfile.location) return;
@@ -181,7 +177,6 @@ export default function App() {
     fetchWeather();
   }, [userProfile.location]);
 
-  // --- MOTOR FINANCIERO (Wall Street & Merval) ---
   useEffect(() => {
     if (activeTab !== 'wealth' || !premiumView) return;
     const fetchMarkets = async () => {
@@ -213,7 +208,6 @@ export default function App() {
     fetchMarkets();
   }, [activeTab, premiumView]);
 
-  // --- LÓGICA: CALCULADORA DE FECHAS ---
   const getStatusForDate = (dateStr, config) => {
     if (!dateStr || !config.startDate) return null;
     const start = new Date(config.startDate);
@@ -233,7 +227,6 @@ export default function App() {
   const currentStatus = useMemo(() => getStatusForDate(new Date().toISOString().split('T')[0], rosterConfig), [rosterConfig]);
   const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
 
-  // --- HANDLERS AUTH & SHARE ---
   const handleInstallClick = async () => {
     if (!installPrompt) return;
     installPrompt.prompt();
@@ -252,11 +245,10 @@ export default function App() {
         showToast("Sesión iniciada con éxito.");
       }
     } catch (error) { 
-      console.error(error);
       if (error.code === 'auth/credential-already-in-use') {
-        showToast("Este correo ya está registrado en otra cuenta.");
+        showToast("Este correo ya está registrado.");
       } else {
-        showToast("Conexión cancelada o bloqueada."); 
+        showToast("Conexión cancelada."); 
       }
     }
   };
@@ -274,7 +266,6 @@ export default function App() {
     else { showToast("Comparte tu enlace web."); }
   };
 
-  // --- HANDLERS FORMULARIOS ---
   const updateRoster = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -291,18 +282,13 @@ export default function App() {
       company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport'),
       homeProvince: fd.get('homeProvince'), siteProvince: fd.get('siteProvince')
     };
-    
-    // Guardar en Perfil Privado
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), profileData);
-    
-    // Sincronizar Demografía Pública para el CEO
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', user.uid), {
       homeProvince: profileData.homeProvince,
       siteProvince: profileData.siteProvince,
       lastLogin: new Date().toISOString()
     }, { merge: true });
-
-    showToast("Perfil guardado y sincronizado.");
+    showToast("Perfil guardado.");
   };
 
   const toggleTheme = async (newTheme) => {
@@ -323,7 +309,6 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'goals', goal.id), { ...goal, current: newAmount > goal.target ? goal.target : newAmount });
   };
 
-  // --- SMART AD ENGINE (CEO) ---
   const launchAd = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -349,7 +334,6 @@ export default function App() {
     } catch (err) { showToast("Error al eliminar campaña."); }
   };
 
-  // --- BÓVEDA CEO ---
   const [clickCount, setClickCount] = useState(0);
   const handleLogoClick = () => {
     setClickCount(prev => prev + 1);
@@ -362,7 +346,6 @@ export default function App() {
     else { setVaultError(true); }
   };
 
-  // --- UI THEMES CLÁSICOS ---
   const dynamicTheme = theme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-slate-100';
   const cardClasses = {
     dark: 'bg-slate-900/60 border-slate-800 backdrop-blur-xl',
@@ -377,7 +360,6 @@ export default function App() {
     return <BriefcaseBusiness size={24} className="mb-2"/>; 
   };
 
-  // Título Corregido para Tema Claro/Oscuro
   const HeaderTitle = ({ icon: Icon, title, colorClass }) => (
     <div className="flex items-center space-x-3">
       <div className={`p-2.5 rounded-xl border ${cardClasses[theme]} bg-opacity-50 shadow-sm`}><Icon className={colorClass} size={22}/></div>
@@ -392,7 +374,6 @@ export default function App() {
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
       
-      {/* NOTIFICACIONES TOAST */}
       {toast && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-emerald-500 text-white px-5 py-2.5 rounded-full font-bold shadow-xl z-[100] text-sm animate-in slide-in-from-top-4 flex items-center">
           <CheckCircle2 size={16} className="mr-2"/> {toast}
@@ -434,6 +415,7 @@ export default function App() {
 
       <main className="max-w-md mx-auto p-4 space-y-6">
         
+        {}
         {installPrompt && (
           <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
             <div><p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p><p className={`text-xs mt-0.5 ${textMuted}`}>Añade la app a tu pantalla de inicio.</p></div>
@@ -441,7 +423,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 1: ROSTER */}
+        {}
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className={`relative overflow-hidden rounded-3xl border p-6 ${cardClasses[theme]}`}>
@@ -459,7 +441,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* MOTOR DE ANUNCIOS SMART */}
+            {}
             {shouldShowAd && (
               <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative animate-in fade-in slide-in-from-top-4">
                  <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
@@ -486,6 +468,7 @@ export default function App() {
                </div>
             </div>
 
+            {}
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex flex-col mb-4">
                 <div className="flex items-center"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de Relevo</h3></div>
@@ -507,7 +490,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: CREW */}
+        {}
         {activeTab === 'crew' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
@@ -543,6 +526,7 @@ export default function App() {
               )}
             </div>
 
+            {}
             <button onClick={shareMyCode} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
                <Smartphone size={18} />
                <span className="font-bold text-sm">Enviar mi código a un contacto</span>
@@ -582,7 +566,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: PLANNER */}
+        {}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
@@ -603,7 +587,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 4: WEALTH */}
+        {}
         {activeTab === 'wealth' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="flex justify-between items-center mb-6">
@@ -650,6 +634,7 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-4 animate-in slide-in-from-left-4">
+                 {}
                  <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-2xl p-5 text-white shadow-xl border border-indigo-500/30 relative overflow-hidden">
                     <div className="absolute right-0 top-0 opacity-10"><TrendingUp size={100} /></div>
                     <h3 className="font-black text-lg mb-1 flex items-center"><LineChart size={18} className="mr-2 text-indigo-400"/> Mercado USA (Wall Street)</h3>
@@ -697,7 +682,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 5: SETTINGS */}
+        {}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             
@@ -712,7 +697,7 @@ export default function App() {
                  <div className="flex items-center justify-between">
                    <div>
                      <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta Blindada</p>
-                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube.</p>
+                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube de Google.</p>
                    </div>
                    <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
                      <CheckCircle2 size={16} className="text-emerald-500"/>
@@ -738,7 +723,7 @@ export default function App() {
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
                <div><p className={`text-xs font-bold uppercase tracking-wider text-blue-500`}>Tu Código RosterMax</p><p className="font-mono text-lg tracking-widest mt-1">RM-{user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}</p></div>
-               <button onClick={shareMyCode} className={`p-2 rounded-lg border active:scale-90 transition-transform ${theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
+               <button onClick={shareMyCode} className={`p-2 rounded-lg border active:scale-90 transition-transform ${theme==='light'?'bg-white border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
@@ -753,7 +738,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><MapPin size={12} className="mr-1"/> Locación</label><input name="location" type="text" defaultValue={userProfile.location} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
+                  <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><MapPin size={12} className="mr-1"/> Yacimiento</label><input name="location" type="text" defaultValue={userProfile.location} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                   <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><Truck size={12} className="mr-1"/> Transporte</label>
                     <select name="transport" defaultValue={userProfile.transport} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`}>
                       <option value="Vuelo">Vuelo</option><option value="Micro">Micro</option><option value="Camioneta">Camioneta</option>
@@ -790,7 +775,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 6: ADMIN DASHBOARD (CEO) */}
+        {}
         {activeTab === 'admin' && isAdmin && (
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
              <div className="mb-6">
@@ -800,8 +785,11 @@ export default function App() {
              <div className="grid grid-cols-2 gap-4">
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}>
                   <Users2 size={24} className="text-blue-500 mb-2"/>
-                  <span className="text-3xl font-black">{realUserCount}</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Cuentas Creadas</p>
+                  <div className="flex items-baseline space-x-2">
+                    <span className="text-3xl font-black">{userStats.total}</span>
+                    <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">({userStats.linked} PRO)</span>
+                  </div>
+                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Descargas vs Blindadas</p>
                 </div>
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}>
                   <Megaphone size={24} className="text-emerald-500 mb-2"/>
