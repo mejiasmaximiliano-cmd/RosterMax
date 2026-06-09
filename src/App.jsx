@@ -145,7 +145,8 @@ export default function App() {
         
         snap.docs.forEach(d => {
           const data = d.data();
-          if (!data.isAnonymous) linkedCount++;
+          // CORRECCIÓN: Verificación estricta (=== false) ignorando los undefined
+          if (data.isAnonymous === false) linkedCount++;
           if (data.homeProvince) homeStats[data.homeProvince] = (homeStats[data.homeProvince] || 0) + 1;
           if (data.siteProvince) siteStats[data.siteProvince] = (siteStats[data.siteProvince] || 0) + 1;
         });
