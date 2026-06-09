@@ -13,5 +13,16 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    
+    <!-- REGISTRO DEL SERVICE WORKER PARA INSTALACIÓN PWA -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(reg => {
+            console.log('SW registrado', reg.scope);
+          }).catch(err => console.log('Fallo SW', err));
+        });
+      }
+    </script>
   </body>
 </html>
