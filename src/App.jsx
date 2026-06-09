@@ -14,8 +14,7 @@ import {
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
-  GoogleAuthProvider, signInWithRedirect, getRedirectResult, 
-  linkWithRedirect, signInWithCredential
+  GoogleAuthProvider, signInWithPopup, linkWithPopup
 } from 'firebase/auth';
 import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
 
@@ -53,10 +52,11 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
   const [realUserCount, setRealUserCount] = useState(0);
+  const [demographics, setDemographics] = useState({ home: {}, site: {} });
   
   // Data States
   const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0] });
-  const [userProfile, setUserProfile] = useState({ company: '', sector: 'Petróleo & Gas', location: 'Neuquén', transport: 'Vuelo' });
+  const [userProfile, setUserProfile] = useState({ company: '', sector: 'Petróleo & Gas', location: 'Neuquén', transport: 'Vuelo', homeProvince: '', siteProvince: '' });
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
   const [logs, setLogs] = useState([]); 
@@ -102,25 +102,8 @@ export default function App() {
     };
   }, []);
 
-  // --- MOTOR DE AUTENTICACIÓN GOOGLE ---
+  // --- MOTOR DE AUTENTICACIÓN (POPUP SEGURO) ---
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const result = await getRedirectResult(auth);
-        if (result) setAuthMsg("Cuenta blindada con éxito.");
-      } catch (error) {
-        if (error.code === 'auth/credential-already-in-use') {
-          try {
-            await signInWithCredential(auth, error.credential);
-            setAuthMsg("Sesión recuperada exitosamente.");
-          } catch (e) { setAuthMsg("Error al recuperar sesión."); }
-        } else {
-          setAuthMsg("Error al vincular: " + error.message);
-        }
-      }
-    };
-    initAuth();
-
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
@@ -135,8 +118,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // VERIFICACIÓN ABSOLUTA DE SEGURIDAD (Si tiene email, NO es invitado)
-  const isPermanentlyLinked = user && !user.isAnonymous && user.email;
+  const isPermanentlyLinked = user && !user.isAnonymous;
 
   // --- BASE DE DATOS (SYNC PRIVADO Y PÚBLICO) ---
   useEffect(() => {
@@ -149,7 +131,6 @@ export default function App() {
     const unsubLogs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     
-    // Escucha Global de Anuncios
     const unsubAds = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'), (d) => { 
       if (d.exists() && d.data().active) setCurrentAd(d.data()); 
       else setCurrentAd(null);
@@ -158,14 +139,23 @@ export default function App() {
     return () => { unsubRoster(); unsubProfile(); unsubTheme(); unsubTasks(); unsubGoals(); unsubLogs(); unsubFriends(); unsubAds(); };
   }, [user]);
 
-  // --- OBTENER TOTAL DE USUARIOS (CEO) ---
+  // --- OBTENER DATOS DEL CEO (USUARIOS Y DEMOGRAFÍA) ---
   useEffect(() => {
     if (!isAdmin) return;
     const fetchUsers = async () => {
       try {
         const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'));
         setRealUserCount(snap.size);
-      } catch (e) { console.log("Error contando usuarios"); }
+        
+        let homeStats = {};
+        let siteStats = {};
+        snap.docs.forEach(d => {
+          const data = d.data();
+          if (data.homeProvince) homeStats[data.homeProvince] = (homeStats[data.homeProvince] || 0) + 1;
+          if (data.siteProvince) siteStats[data.siteProvince] = (siteStats[data.siteProvince] || 0) + 1;
+        });
+        setDemographics({ home: homeStats, site: siteStats });
+      } catch (e) { console.log("Error contando usuarios", e); }
     };
     fetchUsers();
   }, [isAdmin]);
@@ -255,11 +245,20 @@ export default function App() {
     try {
       const provider = new GoogleAuthProvider();
       if (user && user.isAnonymous) {
-        await linkWithRedirect(user, provider);
+        await linkWithPopup(user, provider);
+        showToast("Cuenta vinculada exitosamente.");
       } else {
-        await signInWithRedirect(auth, provider);
+        await signInWithPopup(auth, provider);
+        showToast("Sesión iniciada con éxito.");
       }
-    } catch (error) { showToast("Error de conexión con Google."); }
+    } catch (error) { 
+      console.error(error);
+      if (error.code === 'auth/credential-already-in-use') {
+        showToast("Este correo ya está registrado en otra cuenta.");
+      } else {
+        showToast("Conexión cancelada o bloqueada."); 
+      }
+    }
   };
 
   const shareMyCode = async () => {
@@ -288,10 +287,22 @@ export default function App() {
   const updateProfile = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), {
-      company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport')
-    });
-    showToast("Perfil guardado.");
+    const profileData = {
+      company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport'),
+      homeProvince: fd.get('homeProvince'), siteProvince: fd.get('siteProvince')
+    };
+    
+    // Guardar en Perfil Privado
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), profileData);
+    
+    // Sincronizar Demografía Pública para el CEO
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', user.uid), {
+      homeProvince: profileData.homeProvince,
+      siteProvince: profileData.siteProvince,
+      lastLogin: new Date().toISOString()
+    }, { merge: true });
+
+    showToast("Perfil guardado y sincronizado.");
   };
 
   const toggleTheme = async (newTheme) => {
@@ -366,10 +377,11 @@ export default function App() {
     return <BriefcaseBusiness size={24} className="mb-2"/>; 
   };
 
+  // Título Corregido para Tema Claro/Oscuro
   const HeaderTitle = ({ icon: Icon, title, colorClass }) => (
     <div className="flex items-center space-x-3">
       <div className={`p-2.5 rounded-xl border ${cardClasses[theme]} bg-opacity-50 shadow-sm`}><Icon className={colorClass} size={22}/></div>
-      <h2 className="text-2xl font-black tracking-tight">{title}</h2>
+      <h2 className={`text-2xl font-black tracking-tight ${theme === 'light' ? 'text-slate-800' : 'text-white'}`}>{title}</h2>
     </div>
   );
 
@@ -694,21 +706,23 @@ export default function App() {
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
             
-            {/* ESTADO DE CUENTA INTELIGENTE (VERIFICACIÓN SEGURA) */}
+            {/* ESTADO DE CUENTA INTELIGENTE (VERIFICACIÓN SEGURA ABSOLUTA) */}
             {isPermanentlyLinked ? (
               <div className={`rounded-2xl border p-5 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/30'} flex flex-col shadow-sm`}>
                  <div className="flex items-center justify-between">
                    <div>
                      <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta Blindada</p>
-                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube de Google.</p>
+                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube.</p>
                    </div>
                    <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
                      <CheckCircle2 size={16} className="text-emerald-500"/>
                    </div>
                  </div>
-                 <div className={`mt-3 pt-3 border-t ${theme === 'light' ? 'border-emerald-200' : 'border-emerald-500/20'}`}>
-                   <p className="text-xs font-bold text-slate-500 flex items-center"><User size={12} className="mr-1"/> {user.email}</p>
-                 </div>
+                 {user.email && (
+                   <div className={`mt-3 pt-3 border-t ${theme === 'light' ? 'border-emerald-200' : 'border-emerald-500/20'}`}>
+                     <p className={`text-xs font-bold flex items-center ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}><User size={12} className="mr-1"/> {user.email}</p>
+                   </div>
+                 )}
               </div>
             ) : (
               <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-amber-500/30 bg-amber-500/5`}>
@@ -739,12 +753,16 @@ export default function App() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><MapPin size={12} className="mr-1"/> Yacimiento</label><input name="location" type="text" defaultValue={userProfile.location} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
+                  <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><MapPin size={12} className="mr-1"/> Locación</label><input name="location" type="text" defaultValue={userProfile.location} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                   <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><Truck size={12} className="mr-1"/> Transporte</label>
                     <select name="transport" defaultValue={userProfile.transport} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`}>
                       <option value="Vuelo">Vuelo</option><option value="Micro">Micro</option><option value="Camioneta">Camioneta</option>
                     </select>
                   </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 border-t pt-4 mt-2 border-inherit opacity-80">
+                  <div><label className={`block text-[10px] uppercase font-bold mb-1 ${textMuted}`}>Prov. de Origen</label><input name="homeProvince" type="text" placeholder="Ej. Mendoza" defaultValue={userProfile.homeProvince} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
+                  <div><label className={`block text-[10px] uppercase font-bold mb-1 ${textMuted}`}>Prov. de Destino</label><input name="siteProvince" type="text" placeholder="Ej. Neuquén" defaultValue={userProfile.siteProvince} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                 </div>
                 <button type="submit" className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2.5 rounded-xl transition-all text-sm mt-2 shadow-lg shadow-indigo-500/20 active:scale-95">Guardar Perfil</button>
               </form>
@@ -791,11 +809,30 @@ export default function App() {
                   <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Anuncios Activos</p>
                 </div>
              </div>
+             
+             {/* PANEL DEMOGRÁFICO */}
+             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+                <h3 className="font-bold flex items-center mb-4"><MapPin size={18} className="mr-2 text-indigo-500"/> Mapa Demográfico</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className={`text-[10px] uppercase tracking-widest font-bold mb-2 ${textMuted}`}>Origen Top</p>
+                    {Object.entries(demographics.home).length > 0 ? Object.entries(demographics.home).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([prov, count]) => (
+                      <div key={prov} className="flex justify-between items-center mb-1"><span className="truncate pr-2">{prov}</span> <span className="font-bold text-indigo-500">{count}</span></div>
+                    )) : <p className="text-xs italic opacity-50">Sin datos</p>}
+                  </div>
+                  <div>
+                    <p className={`text-[10px] uppercase tracking-widest font-bold mb-2 ${textMuted}`}>Yacimiento Top</p>
+                    {Object.entries(demographics.site).length > 0 ? Object.entries(demographics.site).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([prov, count]) => (
+                      <div key={prov} className="flex justify-between items-center mb-1"><span className="truncate pr-2">{prov}</span> <span className="font-bold text-indigo-500">{count}</span></div>
+                    )) : <p className="text-xs italic opacity-50">Sin datos</p>}
+                  </div>
+                </div>
+             </div>
 
              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
                <h3 className="font-bold flex items-center mb-4 text-amber-500"><Target size={18} className="mr-2"/> Smart Ad Engine</h3>
                
-               {/* VISTA DE LA CAMPAÑA ACTIVA (NUEVO) */}
+               {/* VISTA DE LA CAMPAÑA ACTIVA */}
                {currentAd ? (
                  <div className="bg-slate-900 border border-amber-500/50 p-4 rounded-xl mb-6 shadow-lg shadow-amber-500/10">
                     <div className="flex items-center justify-between mb-2">
