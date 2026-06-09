@@ -6,7 +6,7 @@ import {
   CheckCircle2, Circle, X, DollarSign, Award, Users, 
   Plane, Thermometer, PieChart, Zap, BarChart3, Calculator, 
   Share2, Info, MapPin, Building2, Truck, BriefcaseBusiness,
-  CloudOff, ShieldAlert, Globe, Users2, Download
+  CloudOff, ShieldAlert, Globe, Users2, Download, Send, Smartphone
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -31,7 +31,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__f
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'roster-max-production';
+const appId = 'roster-max-production';
 
 export default function App() {
   // --- STATES ---
@@ -48,7 +48,7 @@ export default function App() {
   const [showAdminVault, setShowAdminVault] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
   const [vaultError, setVaultError] = useState(false);
-  const [installPrompt, setInstallPrompt] = useState(null); // NUEVO: Estado para PWA
+  const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
   
   // Data States
@@ -61,6 +61,9 @@ export default function App() {
   const [targetDate, setTargetDate] = useState('');
   const [calcInvestment, setCalcInvestment] = useState({ amount: 1000, years: 5 });
 
+  // Weather State
+  const [weatherData, setWeatherData] = useState({ temp: '--', code: 0, loading: false });
+
   // --- LISTENERS: OFFLINE & PWA INSTALL ---
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
@@ -68,10 +71,9 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Captura el evento de instalación nativo
     const handleBeforeInstallPrompt = (e) => {
-      e.preventDefault(); // Evita que Chrome muestre el mini-infobar abajo
-      setInstallPrompt(e); // Guarda el evento para nuestro botón
+      e.preventDefault();
+      setInstallPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
@@ -82,24 +84,18 @@ export default function App() {
     };
   }, []);
 
-  // --- AUTHENTICATION ENGINE (REDIRECT SAFE) ---
+  // --- AUTHENTICATION ENGINE ---
   useEffect(() => {
     const initAuth = async () => {
       try {
-        // Manejar el retorno de Google de forma segura para PWA
         const result = await getRedirectResult(auth);
-        if (result) {
-          console.log("Sesión de Google exitosa");
-          setAuthMsg("Cuenta enlazada exitosamente.");
-        }
+        if (result) setAuthMsg("Cuenta enlazada exitosamente.");
       } catch (error) {
-        console.error("Error al retornar de Google:", error);
         if (error.code === 'auth/credential-already-in-use') {
            setAuthMsg("Este correo ya está registrado. Inicia sesión directamente.");
         }
       }
     };
-    
     initAuth();
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -107,42 +103,13 @@ export default function App() {
         setUser(currentUser);
         setLoading(false);
       } else {
-        // Si no hay nadie logueado, crear cuenta temporal (Invitado)
-        try {
-          await signInAnonymously(auth);
-        } catch (err) { console.error("Error anon auth", err); }
+        try { await signInAnonymously(auth); } catch (err) { console.error(err); }
       }
     });
     return () => unsubscribe();
   }, []);
 
-  // --- PWA INSTALL HANDLER ---
-  const handleInstallClick = async () => {
-    if (!installPrompt) return;
-    installPrompt.prompt(); // Muestra el cartel nativo del sistema
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setInstallPrompt(null); // Oculta nuestro botón si aceptó
-    }
-  };
-
-  // --- GOOGLE LINK HANDLER (PWA SAFE) ---
-  const linkWithGoogle = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      if (user && user.isAnonymous) {
-        // Convierte la cuenta temporal en permanente usando Redirección
-        await linkWithRedirect(user, provider);
-      } else {
-        await signInWithRedirect(auth, provider);
-      }
-    } catch (error) {
-      console.error("Error iniciando Google Auth", error);
-      setAuthMsg("Error al iniciar conexión segura.");
-    }
-  };
-
-  // --- DATA FETCHING ---
+  // --- DATA FETCHING & SYNC ---
   useEffect(() => {
     if (!user) return;
     const unsubRoster = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), (docSnap) => {
@@ -174,6 +141,33 @@ export default function App() {
     return () => { unsubRoster(); unsubProfile(); unsubTheme(); unsubTasks(); unsubGoals(); unsubLogs(); unsubFriends(); };
   }, [user]);
 
+  // --- WEATHER API ENGINE ---
+  useEffect(() => {
+    const fetchWeather = async () => {
+      if (!userProfile.location) return;
+      setWeatherData(prev => ({ ...prev, loading: true }));
+      try {
+        // 1. Geocoding (Obtener Lat y Lon por el nombre de la ciudad)
+        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(userProfile.location)}&count=1&language=es`);
+        const geoData = await geoRes.json();
+        
+        if (geoData.results && geoData.results.length > 0) {
+          const { latitude, longitude } = geoData.results[0];
+          // 2. Traer Clima actual
+          const wxRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
+          const wxData = await wxRes.json();
+          setWeatherData({ temp: Math.round(wxData.current_weather.temperature), code: wxData.current_weather.weathercode, loading: false });
+        } else {
+          setWeatherData({ temp: '--', code: 0, loading: false });
+        }
+      } catch (error) {
+        console.error("Error Weather API:", error);
+        setWeatherData({ temp: '--', code: 0, loading: false });
+      }
+    };
+    fetchWeather();
+  }, [userProfile.location]);
+
   // --- LOGIC: DATE CALCULATOR ENGINE ---
   const getStatusForDate = (dateStr, config) => {
     if (!dateStr || !config.startDate) return null;
@@ -200,37 +194,56 @@ export default function App() {
   const currentStatus = useMemo(() => getStatusForDate(new Date().toISOString().split('T')[0], rosterConfig), [rosterConfig]);
   const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
 
-  // --- EASTER EGG: BÓVEDA CEO ---
-  const [clickCount, setClickCount] = useState(0);
-  const handleLogoClick = () => {
-    setClickCount(prev => prev + 1);
-    if (clickCount + 1 === 5) {
-      setShowAdminVault(true);
-      setClickCount(0);
-    }
-    setTimeout(() => setClickCount(0), 3000); 
+  // --- HANDLERS ---
+  const handleInstallClick = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') setInstallPrompt(null);
   };
 
-  const handleVaultSubmit = (e) => {
-    e.preventDefault();
-    if (adminPassword === 'admin123') { 
-      setIsAdmin(true);
-      setShowAdminVault(false);
-      setActiveTab('admin');
-      setAdminPassword('');
-      setVaultError(false);
+  const linkWithGoogle = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      if (user && user.isAnonymous) await linkWithRedirect(user, provider);
+      else await signInWithRedirect(auth, provider);
+    } catch (error) { setAuthMsg("Error al conectar con Google."); }
+  };
+
+  // NATIVOS WEB SHARE API
+  const shareApp = async () => {
+    const shareData = {
+      title: 'RosterMax',
+      text: '¡Instala RosterMax! La mejor app para gestionar nuestro diagrama de trabajo y organizar los francos.',
+      url: window.location.origin
+    };
+    if (navigator.share) {
+      try { await navigator.share(shareData); } catch (err) { console.log('Error sharing', err); }
     } else {
-      setVaultError(true);
+      alert(`Comparte este enlace con tus colegas: ${window.location.origin}`);
     }
   };
 
-  // --- HANDLERS BASES DE DATOS ---
+  const shareMyCode = async () => {
+    const myCode = `RM-${user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}`;
+    const shareData = {
+      title: 'Mi Código RosterMax',
+      text: `¡Hola! Agrégame a tu equipo en RosterMax usando mi código de vinculación: ${myCode}`
+    };
+    if (navigator.share) {
+      try { await navigator.share(shareData); } catch (err) { console.log('Error sharing code', err); }
+    } else {
+      alert(`Tu código es: ${myCode}. Envíalo a tus compañeros.`);
+    }
+  };
+
   const updateRoster = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), {
-      workDays: parseInt(fd.get('workDays')), restDays: parseInt(fd.get('restDays')), startDate: fd.get('startDate')
+      workDays: parseInt(fd.get('workDays')), restDays: parseInt(fd.get('restDays')), startDate: fd.get('startDate') // CORRECCIÓN AQUÍ
     });
+    alert("Diagrama actualizado.");
   };
 
   const updateProfile = async (e) => {
@@ -239,6 +252,7 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), {
       company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport')
     });
+    alert("Perfil guardado.");
   };
 
   const toggleTheme = async (newTheme) => {
@@ -256,7 +270,7 @@ export default function App() {
       e.preventDefault();
       const code = e.target.elements.syncCode.value;
       if(!code) return;
-      alert(`Código ${code} válido. Sincronizando datos... (Simulado)`);
+      alert(`Buscando código ${code}... (Sincronización en desarrollo)`);
       await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), {
         name: "Compañero (Sync)", workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0], isSynced: true, createdAt: new Date().toISOString()
       });
@@ -270,32 +284,48 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'goals', goal.id), { ...goal, current: newAmount > goal.target ? goal.target : newAmount });
   };
 
-  // --- UI THEMES ---
-  const themeClasses = {
-    dark: 'bg-slate-950 text-slate-100',
-    light: 'bg-slate-100 text-slate-900',
-    weather: 'bg-gradient-to-br from-cyan-900 via-blue-900 to-indigo-950 text-white animate-pulse'
+  // --- UI THEMES & DYNAMIC WEATHER COLORS ---
+  const getDynamicThemeClass = () => {
+    if (theme === 'dark') return 'bg-slate-950 text-slate-100';
+    if (theme === 'light') return 'bg-slate-100 text-slate-900';
+    if (theme === 'weather') {
+      const code = weatherData.code;
+      if (code <= 1) return 'bg-gradient-to-br from-sky-400 to-blue-600 text-white'; // Despejado
+      if (code === 2 || code === 3) return 'bg-gradient-to-br from-slate-400 to-slate-600 text-white'; // Nublado
+      if (code >= 51 && code <= 67) return 'bg-gradient-to-br from-slate-700 to-blue-900 text-white'; // Lluvia
+      if (code >= 71 && code <= 86) return 'bg-gradient-to-br from-indigo-100 to-blue-300 text-slate-900'; // Nieve
+      return 'bg-gradient-to-br from-cyan-900 via-blue-900 to-indigo-950 text-white'; // Default animado
+    }
+    return 'bg-slate-950 text-slate-100';
   };
+
+  const dynamicTheme = getDynamicThemeClass();
+  
   const cardClasses = {
     dark: 'bg-slate-900/60 border-slate-800 backdrop-blur-xl',
     light: 'bg-white/70 border-slate-200 backdrop-blur-xl shadow-sm',
-    weather: 'bg-white/10 border-white/20 backdrop-blur-md'
+    weather: 'bg-white/20 border-white/30 backdrop-blur-md shadow-lg shadow-black/10'
   };
-  const textMuted = theme === 'light' ? 'text-slate-500' : 'text-slate-400';
+  const textMuted = theme === 'light' || (theme==='weather' && weatherData.code >=71 && weatherData.code <=86) ? 'text-slate-600' : 'text-slate-300';
   const inputBg = theme === 'light' ? 'bg-white border-slate-300 text-slate-900' : 'bg-slate-950/50 border-slate-700 text-white';
 
   const getTransportIcon = (type) => {
-    if (type === 'Vuelo') return <Plane size={24} className="text-indigo-400 mb-2"/>;
-    if (type === 'Camioneta' || type === 'Auto Propio') return <Truck size={24} className="text-indigo-400 mb-2"/>;
-    return <BriefcaseBusiness size={24} className="text-indigo-400 mb-2"/>; 
+    if (type === 'Vuelo') return <Plane size={24} className="mb-2"/>;
+    if (type === 'Camioneta' || type === 'Auto Propio') return <Truck size={24} className="mb-2"/>;
+    return <BriefcaseBusiness size={24} className="mb-2"/>; 
   };
 
-  const isAnonymous = user?.isAnonymous;
+  const handleLogoClick = () => {
+    setClickCount(prev => prev + 1);
+    if (clickCount + 1 === 5) { setShowAdminVault(true); setClickCount(0); }
+    setTimeout(() => setClickCount(0), 3000); 
+  };
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>;
 
   return (
-    <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${themeClasses[theme]}`}>
+    // Agregamos overscroll-none para bloquear el Pull-to-Refresh y hacerla sentir 100% nativa
+    <div className={`min-h-screen font-sans pb-24 transition-all duration-700 overscroll-none ${dynamicTheme}`}>
       
       {isOffline && (
         <div className="bg-amber-500 text-slate-900 text-[10px] font-bold px-4 py-1.5 flex justify-center items-center uppercase tracking-widest z-50 relative">
@@ -305,21 +335,20 @@ export default function App() {
 
       {showAdminVault && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-sm animate-in zoom-in-95 shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-sm animate-in zoom-in-95 shadow-2xl text-white">
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-black text-amber-500 flex items-center"><ShieldAlert className="mr-2"/> Autenticación CEO</h3>
               <button onClick={() => setShowAdminVault(false)} className="text-slate-500 hover:text-white"><X size={20}/></button>
             </div>
             <form onSubmit={handleVaultSubmit}>
               <input type="password" autoFocus placeholder="Contraseña" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className={`w-full rounded-xl px-4 py-3 mb-2 outline-none border bg-slate-950 text-white ${vaultError ? 'border-red-500' : 'border-slate-700 focus:border-amber-500'}`} />
-              {vaultError && <p className="text-xs text-red-500 mb-4">Contraseña incorrecta.</p>}
-              <button type="submit" className="w-full mt-2 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl hover:bg-amber-400 transition-colors">Desbloquear Bóveda</button>
+              <button type="submit" className="w-full mt-2 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl hover:bg-amber-400">Desbloquear Bóveda</button>
             </form>
           </div>
         </div>
       )}
 
-      <header className={`sticky top-0 z-40 px-4 py-4 border-b ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/80 border-slate-800'} backdrop-blur-md`}>
+      <header className={`sticky top-0 z-40 px-4 py-4 border-b backdrop-blur-md ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/50 border-slate-800/50'}`}>
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div className="flex items-center space-x-2 cursor-pointer select-none" onClick={handleLogoClick}>
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20"><span className="font-bold text-white">R</span></div>
@@ -333,9 +362,8 @@ export default function App() {
 
       <main className="max-w-md mx-auto p-4 space-y-6">
         
-        {/* BANNER DE INSTALACIÓN NATIVO UI/UX */}
         {installPrompt && (
-          <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4">
+          <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
             <div>
               <p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p>
               <p className={`text-xs mt-0.5 ${textMuted}`}>Añade la app a tu pantalla de inicio.</p>
@@ -364,27 +392,22 @@ export default function App() {
               </div>
             </div>
 
-            {userProfile.location?.toLowerCase().includes('neuquén') && (
-              <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative">
-                 <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
-                 <div className="relative z-10"><p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Target size={10} className="mr-1"/> Sponsor Exclusivo Vaca Muerta</p><p className="font-bold text-white text-sm">20% Off Service Amarok/Hilux</p><p className="text-xs text-blue-200 mt-0.5">En Neuquén Capital.</p></div>
-                 <ChevronRight className="text-blue-400 relative z-10"/>
-              </div>
-            )}
-
             <div className={`grid grid-cols-2 gap-4`}>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
-                 <Thermometer size={24} className="text-amber-500 mb-2"/><span className="text-2xl font-bold">14°C</span>
-                 <span className={`text-xs font-bold mt-1 max-w-full truncate px-2`} title={userProfile.location || 'Sin Ubicación'}>{userProfile.location || 'Ubicación...'}</span><span className={`text-[9px] ${textMuted}`}>Pronóstico Local</span>
+                 <Thermometer size={24} className="text-amber-500 mb-2"/>
+                 <span className="text-2xl font-bold">{weatherData.loading ? '...' : `${weatherData.temp}°C`}</span>
+                 <span className={`text-xs font-bold mt-1 max-w-full truncate px-2`} title={userProfile.location || 'Sin Ubicación'}>{userProfile.location || 'Ubicación...'}</span>
+                 <span className={`text-[9px] ${textMuted}`}>Tiempo Real API</span>
                </div>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
-                 {getTransportIcon(userProfile.transport)}<span className="text-sm font-bold">En {currentStatus?.daysLeftInPhase} días</span>
-                 <span className={`text-[10px] uppercase font-bold mt-1 text-indigo-400`}>{userProfile.transport || 'Transporte'}</span>
+                 <div className={theme === 'light' ? 'text-indigo-500' : 'text-indigo-400'}>{getTransportIcon(userProfile.transport)}</div>
+                 <span className="text-sm font-bold">En {currentStatus?.daysLeftInPhase || 0} días</span>
+                 <span className={`text-[10px] uppercase font-bold mt-1 ${theme === 'light' ? 'text-indigo-500' : 'text-indigo-400'}`}>{userProfile.transport || 'Transporte'}</span>
                </div>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-center mb-4"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de Relevo</h3></div>
+              <div className="flex items-center mb-4"><FileText size={18} className={`${theme==='light'?'text-indigo-500':'text-indigo-400'} mr-2`} /><h3 className="font-bold">Bitácora de Relevo</h3></div>
               <form onSubmit={(e) => addGenericDoc(e, 'logs', { content: e.target.elements.log.value, resolved: false })} className="mb-4">
                 <div className="flex space-x-2"><input name="log" type="text" placeholder="Ej. Dejar orden firmada..." className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><button type="submit" className="bg-indigo-500 text-white p-2 rounded-xl"><Plus size={20}/></button></div>
               </form>
@@ -392,7 +415,7 @@ export default function App() {
                 {logs.map(log => (
                   <div key={log.id} className={`p-3 rounded-lg border text-sm flex items-start group transition-all duration-300 ${log.resolved ? 'opacity-50' : ''} ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                     <button onClick={() => toggleLog(log)} className="mr-3 mt-0.5 flex-shrink-0 transition-transform active:scale-90">{log.resolved ? <CheckCircle2 size={18} className="text-emerald-500" /> : <Circle size={18} className={textMuted} />}</button>
-                    <span className={`flex-1 transition-all ${log.resolved ? 'line-through text-slate-500' : ''}`}>{log.content}</span>
+                    <span className={`flex-1 transition-all ${log.resolved ? 'line-through opacity-50' : ''}`}>{log.content}</span>
                     <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'logs', log.id))} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity ml-2"><X size={16}/></button>
                   </div>
                 ))}
@@ -412,7 +435,6 @@ export default function App() {
               <input type="date" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 border ${inputBg} mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
               {targetDate && (
                 <div className="space-y-2 relative z-10">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Estado el {new Date(targetDate).toLocaleDateString()}:</h4>
                   {targetStatus && (
                     <div className={`p-3 rounded-lg border flex justify-between items-center shadow-sm ${targetStatus.isWorking ? (theme==='light'?'bg-amber-50 border-amber-200':'bg-amber-500/10 border-amber-500/30') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30')}`}>
                       <span className="font-semibold text-sm flex items-center"><User size={14} className="mr-1.5 opacity-70"/> Tú</span>
@@ -433,6 +455,13 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* INTEGRACIÓN NATIVA WEB SHARE */}
+            <button onClick={shareMyCode} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
+               <Smartphone size={18} />
+               <span className="font-bold text-sm">Enviar mi código a un contacto</span>
+            </button>
+
             <div className={`rounded-2xl border overflow-hidden ${cardClasses[theme]}`}>
               <div className="flex border-b border-inherit">
                  <button onClick={() => setAddMethod('manual')} className={`flex-1 py-3 text-sm font-bold transition-colors ${addMethod === 'manual' ? 'bg-blue-500/10 text-blue-500 border-b-2 border-b-blue-500' : textMuted}`}>Carga Manual</button>
@@ -444,11 +473,12 @@ export default function App() {
                     <input name="name" type="text" placeholder="Nombre" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                     <div className="flex space-x-2"><input name="w" type="number" placeholder="Trabajo" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /><input name="r" type="number" placeholder="Descanso" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></div>
                     <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida</label><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
-                    <button type="submit" className="w-full bg-slate-800 text-white font-bold py-2.5 rounded-xl border border-slate-700 transition-colors mt-2">Guardar Manualmente</button>
+                    <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors mt-2">Guardar</button>
                   </form>
                 ) : (
                   <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
                     <div className="relative"><input name="syncCode" type="text" placeholder="RM-XXXXX" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
+                    <p className={`text-xs text-center ${textMuted}`}>Pídele su código RM a tu compañero.</p>
                   </form>
                 )}
               </div>
@@ -475,7 +505,7 @@ export default function App() {
             <div className="space-y-3">
               {tasks.map(task => (
                 <div key={task.id} className={`flex items-center justify-between p-4 rounded-xl border group transition-all ${task.completed ? 'opacity-60' : ''} ${cardClasses[theme]}`}>
-                  <div className="flex items-center space-x-3 overflow-hidden cursor-pointer flex-1" onClick={() => toggleTask(task)}><div className={`flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white" />}</div><span className={`truncate font-medium transition-all ${task.completed ? 'line-through text-slate-500' : ''}`}>{task.title}</span></div>
+                  <div className="flex items-center space-x-3 overflow-hidden cursor-pointer flex-1" onClick={() => toggleTask(task)}><div className={`flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white" />}</div><span className={`truncate font-medium transition-all ${task.completed ? 'line-through opacity-50' : ''}`}>{task.title}</span></div>
                   <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id))} className="text-slate-400 hover:text-red-400 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
                 </div>
               ))}
@@ -488,7 +518,7 @@ export default function App() {
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="flex justify-between items-end">
               <div><h2 className="text-2xl font-bold flex items-center">Finanzas <TrendingUp className="ml-2 text-emerald-500" size={24}/></h2><p className={`text-sm ${textMuted}`}>Protege tu capital.</p></div>
-              <button onClick={() => setPremiumView(!premiumView)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center ${premiumView ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/30' : (theme === 'light' ? 'bg-white text-indigo-500 border-indigo-200' : 'bg-slate-900 text-indigo-400 border-indigo-500/30')}`}>
+              <button onClick={() => setPremiumView(!premiumView)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center ${premiumView ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/30' : (theme === 'light' ? 'bg-white text-indigo-500 border-indigo-200' : 'bg-slate-900/80 text-indigo-400 border-indigo-500/30')}`}>
                  {premiumView ? <Target size={14} className="mr-1"/> : <BarChart3 size={14} className="mr-1"/>} {premiumView ? 'Ver Metas' : 'Inversiones PRO'}
               </button>
             </div>
@@ -547,19 +577,21 @@ export default function App() {
         {/* TAB 5: SETTINGS & PROFILE */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <h2 className="text-2xl font-bold">Perfil & Estadísticas</h2>
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold">Perfil & Config</h2>
+              <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Amigo</button>
+            </div>
             
-            {/* SEGURIDAD DE LA CUENTA (GOOGLE REDIRECT) */}
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} ${isAnonymous ? 'border-amber-500/30 bg-amber-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} ${user?.isAnonymous ? 'border-amber-500/30' : 'border-emerald-500/30'}`}>
               <h3 className="font-bold flex items-center mb-2">
-                {isAnonymous ? <AlertCircle size={18} className="mr-2 text-amber-500"/> : <CheckCircle2 size={18} className="mr-2 text-emerald-500"/>}
+                {user?.isAnonymous ? <AlertCircle size={18} className="mr-2 text-amber-500"/> : <CheckCircle2 size={18} className="mr-2 text-emerald-500"/>}
                 Estado de la Cuenta
               </h3>
               <p className={`text-xs mb-4 ${textMuted}`}>
-                {isAnonymous ? "Tu cuenta es temporal. Si limpias el navegador, perderás tus datos." : `Conectado como ${user?.email}`}
+                {user?.isAnonymous ? "Cuenta temporal. Vincula para no perder tus datos." : `Protegida: ${user?.email}`}
               </p>
-              {isAnonymous && (
-                <button onClick={linkWithGoogle} className="w-full flex items-center justify-center bg-white text-slate-900 border border-slate-200 font-bold py-2.5 rounded-xl transition-all shadow-sm">
+              {user?.isAnonymous && (
+                <button onClick={linkWithGoogle} className="w-full flex items-center justify-center bg-white text-slate-900 font-bold py-2.5 rounded-xl shadow-sm transition-all active:scale-95">
                   <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
                   Vincular con Google
                 </button>
@@ -569,7 +601,7 @@ export default function App() {
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
                <div><p className={`text-xs font-bold uppercase tracking-wider text-blue-500`}>Tu Código RosterMax</p><p className="font-mono text-lg tracking-widest mt-1">RM-{user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}</p></div>
-               <button className={`p-2 rounded-lg border ${theme==='light'?'bg-white border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
+               <button onClick={shareMyCode} className={`p-2 rounded-lg border transition-all active:scale-90 ${theme==='light'?'bg-white border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
@@ -591,7 +623,7 @@ export default function App() {
                     </select>
                   </div>
                 </div>
-                <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-all text-sm mt-2">Guardar Perfil Laboral</button>
+                <button type="submit" className="w-full bg-indigo-500 text-white font-bold py-2.5 rounded-xl transition-all active:scale-95 text-sm mt-2">Guardar Perfil Laboral</button>
               </form>
             </div>
             
@@ -602,8 +634,9 @@ export default function App() {
                   <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Trabajo</label><input name="workDays" type="number" defaultValue={rosterConfig.workDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
                   <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Descanso</label><input name="restDays" type="number" defaultValue={rosterConfig.restDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
                 </div>
-                <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida</label><input name="start" type="date" defaultValue={rosterConfig.startDate} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
-                <button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/30 transition-all">Actualizar Roster</button>
+                {/* AQUI ESTÁ EL BUG RESUELTO: name="startDate" en vez de name="start" */}
+                <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida</label><input name="startDate" type="date" defaultValue={rosterConfig.startDate} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
+                <button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/30 transition-all active:scale-95">Actualizar Roster</button>
               </form>
             </div>
 
@@ -618,55 +651,15 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 6: ADMIN DASHBOARD (CEO) */}
-        {activeTab === 'admin' && isAdmin && (
-          <div className="space-y-6 animate-in zoom-in-95 duration-300">
-             <div>
-               <h2 className="text-2xl font-black text-amber-500 flex items-center"><ShieldAlert className="mr-2"/> Centro de Mando</h2>
-               <p className={`text-sm ${textMuted}`}>Métricas globales de tu negocio.</p>
-             </div>
-
-             <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}>
-                  <Users2 size={24} className="text-blue-500 mb-2"/>
-                  <span className="text-3xl font-black">5,204</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Usuarios Activos</p>
-                </div>
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}>
-                  <DollarSign size={24} className="text-emerald-500 mb-2"/>
-                  <span className="text-3xl font-black">$12.4k</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Proyección Mensual</p>
-                </div>
-             </div>
-
-             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
-               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Target size={18} className="mr-2"/> Smart Ad Engine</h3>
-               <form onSubmit={(e) => { e.preventDefault(); alert("En producción inyectará el banner a la base de datos."); }} className="space-y-3">
-                 <input name="adCompany" type="text" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <input name="adTitle" type="text" placeholder="Título (Ej. 20% Off Pastillas)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <input name="adLocation" type="text" placeholder="Locación Objetivo (Ej. Neuquén)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-2 rounded-xl text-sm hover:bg-amber-400 transition-colors">Lanzar Campaña Segmentada</button>
-               </form>
-             </div>
-          </div>
-        )}
-
       </main>
 
-      <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'} backdrop-blur-xl`}>
+      <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 backdrop-blur-xl ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/80 border-slate-800/80'}`}>
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">
           <button onClick={() => setActiveTab('roster')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'roster' ? 'text-emerald-500' : textMuted}`}><Calendar size={20} /><span className="text-[9px] font-bold">Roster</span></button>
           <button onClick={() => setActiveTab('crew')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'crew' ? 'text-blue-500' : textMuted}`}><Users size={20} /><span className="text-[9px] font-bold">Equipo</span></button>
           <button onClick={() => setActiveTab('planner')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'planner' ? 'text-emerald-500' : textMuted}`}><CheckSquare size={20} /><span className="text-[9px] font-bold">Franco</span></button>
           <button onClick={() => setActiveTab('wealth')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'wealth' ? 'text-emerald-500' : textMuted}`}><TrendingUp size={20} /><span className="text-[9px] font-bold">Finanzas</span></button>
           <button onClick={() => setActiveTab('settings')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'settings' ? 'text-emerald-500' : textMuted}`}><User size={20} /><span className="text-[9px] font-bold">Perfil</span></button>
-          
-          {isAdmin && (
-            <button onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'admin' ? 'text-amber-500' : textMuted}`}>
-              <ShieldAlert size={20} className={activeTab === 'admin' ? 'fill-amber-500/20' : ''}/>
-              <span className="text-[9px] font-bold">CEO</span>
-            </button>
-          )}
         </div>
       </nav>
 
