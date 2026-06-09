@@ -1,21 +1,27 @@
 {
   "name": "RosterMax",
   "short_name": "RosterMax",
-  "start_url": ".",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#020617",
   "theme_color": "#10b981",
   "description": "La app N°1 para el trabajador de diagrama",
   "icons": [
     {
-      "src": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Android_O_Preview_Logo.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
     },
     {
-      "src": "https://upload.wikimedia.org/wikipedia/commons/a/ab/Android_O_Preview_Logo.png",
+      "src": "/logo.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/logo.svg",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/svg+xml"
     }
   ]
 }
