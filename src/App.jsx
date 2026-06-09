@@ -43,7 +43,8 @@ export default function App() {
   const [premiumView, setPremiumView] = useState(false); 
   const [addMethod, setAddMethod] = useState('manual');
   
-  // States: PWA, Admin & Auth
+  // States: UX, PWA, Admin & Auth
+  const [toast, setToast] = useState('');
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminVault, setShowAdminVault] = useState(false);
@@ -72,6 +73,12 @@ export default function App() {
     YPF: { price: '...', change: '...' },
     PAM: { price: '...', change: '...' }
   });
+
+  // --- SISTEMA DE NOTIFICACIONES (TOAST) ---
+  const showToast = (message) => {
+    setToast(message);
+    setTimeout(() => setToast(''), 3000);
+  };
 
   // --- ESCUDO ANTI-AMNESIA & PWA ---
   useEffect(() => {
@@ -128,8 +135,8 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const isAnonymous = user?.isAnonymous;
-  const isLinkedToGoogle = user?.providerData?.some(p => p.providerId === 'google.com');
+  // VERIFICACIÓN ABSOLUTA DE SEGURIDAD (Si tiene email, NO es invitado)
+  const isPermanentlyLinked = user && !user.isAnonymous && user.email;
 
   // --- BASE DE DATOS (SYNC PRIVADO Y PÚBLICO) ---
   useEffect(() => {
@@ -142,10 +149,11 @@ export default function App() {
     const unsubLogs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     
+    // Escucha Global de Anuncios
     const unsubAds = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'), (d) => { 
       if (d.exists() && d.data().active) setCurrentAd(d.data()); 
       else setCurrentAd(null);
-    }, (err) => console.log("Faltan permisos públicos para Ads"));
+    }, (err) => console.log("Permisos públicos de Ads pendientes."));
 
     return () => { unsubRoster(); unsubProfile(); unsubTheme(); unsubTasks(); unsubGoals(); unsubLogs(); unsubFriends(); unsubAds(); };
   }, [user]);
@@ -251,20 +259,20 @@ export default function App() {
       } else {
         await signInWithRedirect(auth, provider);
       }
-    } catch (error) { setAuthMsg(`Error de conexión.`); }
+    } catch (error) { showToast("Error de conexión con Google."); }
   };
 
   const shareMyCode = async () => {
     const myCode = `RM-${user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}`;
     const shareData = { title: 'Mi Código RosterMax', text: `¡Agrégame a tu equipo en RosterMax usando mi código: ${myCode}` };
     if (navigator.share) { try { await navigator.share(shareData); } catch (err) {} } 
-    else { alert(`Tu código es: ${myCode}`); }
+    else { showToast(`Tu código es: ${myCode} (Copiado)`); }
   };
 
   const shareApp = async () => {
     const shareData = { title: 'RosterMax', text: '¡Instala RosterMax! La app para gestionar nuestro diagrama.', url: window.location.origin };
     if (navigator.share) { try { await navigator.share(shareData); } catch (err) {} } 
-    else { alert(`Comparte este enlace: ${window.location.origin}`); }
+    else { showToast("Comparte tu enlace web."); }
   };
 
   // --- HANDLERS FORMULARIOS ---
@@ -274,7 +282,7 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), {
       workDays: parseInt(fd.get('workDays')), restDays: parseInt(fd.get('restDays')), startDate: fd.get('startDate')
     });
-    alert("Diagrama actualizado.");
+    showToast("Diagrama actualizado.");
   };
 
   const updateProfile = async (e) => {
@@ -283,7 +291,7 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), {
       company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport')
     });
-    alert("Perfil guardado.");
+    showToast("Perfil guardado.");
   };
 
   const toggleTheme = async (newTheme) => {
@@ -316,11 +324,18 @@ export default function App() {
         active: true,
         updatedAt: new Date().toISOString()
       });
-      alert("¡Campaña lanzada a la base pública!");
+      showToast("¡Campaña activada con éxito!");
       e.target.reset();
     } catch (err) {
-      alert("Error: Asegúrate de haber actualizado las Reglas de Firebase a 'public'.");
+      showToast("Error: Revisa las Reglas de Firebase.");
     }
+  };
+
+  const deleteAd = async () => {
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'));
+      showToast("Campaña eliminada permanentemente.");
+    } catch (err) { showToast("Error al eliminar campaña."); }
   };
 
   // --- BÓVEDA CEO ---
@@ -352,7 +367,7 @@ export default function App() {
   };
 
   const HeaderTitle = ({ icon: Icon, title, colorClass }) => (
-    <div className="flex items-center space-x-3 mb-6">
+    <div className="flex items-center space-x-3">
       <div className={`p-2.5 rounded-xl border ${cardClasses[theme]} bg-opacity-50 shadow-sm`}><Icon className={colorClass} size={22}/></div>
       <h2 className="text-2xl font-black tracking-tight">{title}</h2>
     </div>
@@ -365,6 +380,13 @@ export default function App() {
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
       
+      {/* NOTIFICACIONES TOAST */}
+      {toast && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-emerald-500 text-white px-5 py-2.5 rounded-full font-bold shadow-xl z-[100] text-sm animate-in slide-in-from-top-4 flex items-center">
+          <CheckCircle2 size={16} className="mr-2"/> {toast}
+        </div>
+      )}
+
       {isOffline && (
         <div className="bg-amber-500 text-slate-900 text-[10px] font-bold px-4 py-1.5 flex justify-center items-center uppercase tracking-widest z-50 relative">
           <CloudOff size={12} className="mr-2" /> Modo Sin Conexión
@@ -476,7 +498,9 @@ export default function App() {
         {/* TAB 2: CREW */}
         {activeTab === 'crew' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <HeaderTitle icon={Users} title="Proyector de Equipo" colorClass="text-blue-500" />
+            <div className="mb-6">
+               <HeaderTitle icon={Users} title="Proyector de Equipo" colorClass="text-blue-500" />
+            </div>
             
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-blue-500 relative overflow-hidden`}>
               <div className="absolute -right-4 -top-4 opacity-10"><Search size={80} className="text-blue-500"/></div>
@@ -526,7 +550,7 @@ export default function App() {
                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors mt-2">Guardar Manualmente</button>
                   </form>
                 ) : (
-                  <form onSubmit={(e) => { e.preventDefault(); alert("La sincronización P2P está en fase Beta."); }} className="space-y-4 animate-in fade-in">
+                  <form onSubmit={(e) => { e.preventDefault(); showToast("La sincronización P2P está en fase Beta."); }} className="space-y-4 animate-in fade-in">
                     <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-XXXXX" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
                   </form>
                 )}
@@ -549,7 +573,9 @@ export default function App() {
         {/* TAB 3: PLANNER */}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" />
+            <div className="mb-6">
+               <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" />
+            </div>
             <form onSubmit={(e) => addGenericDoc(e, 'tasks', { title: e.target.elements.title.value, completed: false })} className="flex space-x-2">
               <input name="title" type="text" placeholder="Ej. Turno médico..." className={`flex-1 rounded-xl px-4 py-3 outline-none border shadow-sm ${inputBg}`} required/>
               <button type="submit" className="bg-emerald-500 hover:bg-emerald-400 text-white p-3 rounded-xl shadow-lg shadow-emerald-500/20 active:scale-95"><Plus size={24}/></button>
@@ -665,17 +691,23 @@ export default function App() {
             
             <div className="flex justify-between items-center mb-6">
               <HeaderTitle icon={Settings} title="Ajustes" colorClass="text-slate-400" />
+              <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
             
-            {/* ESTADO DE CUENTA INTELIGENTE */}
-            {isLinkedToGoogle ? (
-              <div className={`rounded-2xl border p-4 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/30'} flex items-center justify-between shadow-sm`}>
-                 <div>
-                   <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta Blindada</p>
-                   <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube de Google.</p>
+            {/* ESTADO DE CUENTA INTELIGENTE (VERIFICACIÓN SEGURA) */}
+            {isPermanentlyLinked ? (
+              <div className={`rounded-2xl border p-5 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/30'} flex flex-col shadow-sm`}>
+                 <div className="flex items-center justify-between">
+                   <div>
+                     <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta Blindada</p>
+                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube de Google.</p>
+                   </div>
+                   <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                     <CheckCircle2 size={16} className="text-emerald-500"/>
+                   </div>
                  </div>
-                 <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                   <CheckCircle2 size={16} className="text-emerald-500"/>
+                 <div className={`mt-3 pt-3 border-t ${theme === 'light' ? 'border-emerald-200' : 'border-emerald-500/20'}`}>
+                   <p className="text-xs font-bold text-slate-500 flex items-center"><User size={12} className="mr-1"/> {user.email}</p>
                  </div>
               </div>
             ) : (
@@ -743,30 +775,47 @@ export default function App() {
         {/* TAB 6: ADMIN DASHBOARD (CEO) */}
         {activeTab === 'admin' && isAdmin && (
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
-             <HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" />
+             <div className="mb-6">
+                <HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" />
+             </div>
 
              <div className="grid grid-cols-2 gap-4">
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}>
                   <Users2 size={24} className="text-blue-500 mb-2"/>
                   <span className="text-3xl font-black">{realUserCount}</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Usuarios Reales</p>
+                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Cuentas Creadas</p>
                 </div>
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}>
-                  <DollarSign size={24} className="text-emerald-500 mb-2"/>
-                  <span className="text-3xl font-black">${(realUserCount * 2.5).toFixed(1)}k</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Proyección Mensual (USD)</p>
+                  <Megaphone size={24} className="text-emerald-500 mb-2"/>
+                  <span className="text-3xl font-black">{currentAd ? '1' : '0'}</span>
+                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Anuncios Activos</p>
                 </div>
              </div>
 
              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
-               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Megaphone size={18} className="mr-2"/> Smart Ad Engine</h3>
-               <form onSubmit={launchAd} className="space-y-3">
+               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Target size={18} className="mr-2"/> Smart Ad Engine</h3>
+               
+               {/* VISTA DE LA CAMPAÑA ACTIVA (NUEVO) */}
+               {currentAd ? (
+                 <div className="bg-slate-900 border border-amber-500/50 p-4 rounded-xl mb-6 shadow-lg shadow-amber-500/10">
+                    <div className="flex items-center justify-between mb-2">
+                       <p className="text-[10px] uppercase tracking-widest text-amber-500 font-bold flex items-center"><span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span> Al Aire</p>
+                    </div>
+                    <p className="font-bold text-white text-lg">{currentAd.title}</p>
+                    <p className="text-sm text-slate-400 mb-4">{currentAd.company} • Objetivo: {currentAd.location}</p>
+                    <button onClick={deleteAd} className="w-full flex items-center justify-center bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 font-bold py-2 rounded-lg text-sm transition-colors"><Trash2 size={16} className="mr-2"/> Detener y Eliminar</button>
+                 </div>
+               ) : (
+                 <p className="text-xs text-slate-400 mb-6 italic border-l-2 border-slate-600 pl-3">No hay campañas activas en este momento.</p>
+               )}
+
+               <form onSubmit={launchAd} className="space-y-3 pt-2 border-t border-amber-500/20">
+                 <p className="text-xs text-amber-500 font-bold mb-2">{currentAd ? 'Reemplazar con Nueva Campaña:' : 'Crear Nueva Campaña:'}</p>
                  <input name="adCompany" type="text" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                  <input name="adTitle" type="text" placeholder="Título (Ej. 20% Off Pastillas)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                  <input name="adLocation" type="text" placeholder="Locación Objetivo (Ej. Neuquén, o 'Todos')" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-2 rounded-xl text-sm hover:bg-amber-400 transition-colors">Lanzar Campaña Segmentada</button>
+                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl text-sm hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20 active:scale-95">{currentAd ? 'Reemplazar Campaña' : 'Lanzar Campaña'}</button>
                </form>
-               <p className="text-[10px] text-amber-500 mt-2">*Requiere Reglas Públicas activadas en Firebase.</p>
              </div>
           </div>
         )}
