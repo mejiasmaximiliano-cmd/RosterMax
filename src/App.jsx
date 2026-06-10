@@ -10,6 +10,7 @@ import {
   Megaphone
 } from 'lucide-react';
 
+// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, 
@@ -17,6 +18,7 @@ import {
 } from 'firebase/auth';
 import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
 
+// --- 🚀 FIREBASE CONFIGURACIÓN ---
 const firebaseConfig = {
   apiKey: "AIzaSyC-YDie00IPgmhE4gOda8KiSjHTew595NA",
   authDomain: "rostermax-60242.firebaseapp.com",
@@ -32,6 +34,7 @@ const db = getFirestore(app);
 const appId = 'roster-max-production';
 
 export default function App() {
+  // --- STATES ---
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('roster'); 
   const [loading, setLoading] = useState(true);
@@ -49,8 +52,9 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
   
-  const [userStats, setUserStats] = useState({ total: 0, linked: 0 }); // NUEVO ESTADO CEO
-  const [demographics, setDemographics] = useState({ home: {}, site: {} });
+  // CEO Metrics
+  const [userStats, setUserStats] = useState({ total: 0, linked: 0 });
+  const [demographics, setDemographics] = useState({ home: {}, site: {}, list: [] });
   
   // Data States
   const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0] });
@@ -59,10 +63,12 @@ export default function App() {
   const [goals, setGoals] = useState([]);
   const [logs, setLogs] = useState([]); 
   const [friends, setFriends] = useState([]); 
+  const [publicUsers, setPublicUsers] = useState([]); // Base pública de sincronización
   const [targetDate, setTargetDate] = useState('');
   const [calcInvestment, setCalcInvestment] = useState({ amount: 1000, years: 5 });
   const [currentAd, setCurrentAd] = useState(null);
 
+  // API States
   const [weatherData, setWeatherData] = useState({ temp: '--', loading: false });
   const [marketData, setMarketData] = useState({ 
     SPY: { price: '...', change: '...' }, 
@@ -71,11 +77,13 @@ export default function App() {
     PAM: { price: '...', change: '...' }
   });
 
+  // --- SISTEMA DE NOTIFICACIONES (TOAST) ---
   const showToast = (message) => {
     setToast(message);
     setTimeout(() => setToast(''), 3000);
   };
 
+  // --- ESCUDO ANTI-AMNESIA & PWA ---
   useEffect(() => {
     document.body.classList.add('overscroll-none');
     
@@ -97,16 +105,33 @@ export default function App() {
     };
   }, []);
 
+  // --- REGISTRO/ACTUALIZACIÓN EN LA BASE PÚBLICA (MÉTRICAS Y SYNC) ---
+  const updatePublicRegistry = async (currentUser, profile, roster) => {
+    if (!currentUser) return;
+    const emailName = currentUser.email ? currentUser.email.split('@')[0] : 'Invitado';
+    const displayName = profile.company ? `${emailName} (${profile.company})` : emailName;
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', currentUser.uid), {
+      uid: currentUser.uid,
+      lastLogin: new Date().toISOString(),
+      isAnonymous: currentUser.isAnonymous,
+      syncCode: `RM-${currentUser.uid.substring(0, 5).toUpperCase()}`,
+      name: displayName,
+      workDays: roster.workDays,
+      restDays: roster.restDays,
+      startDate: roster.startDate,
+      homeProvince: profile.homeProvince || '',
+      siteProvince: profile.siteProvince || ''
+    }, { merge: true }).catch((err) => console.log("Error de sincronización pública:", err));
+  };
+
+  // --- MOTOR DE AUTENTICACIÓN ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
         setLoading(false);
-        // Guardamos si es anónimo o no en el registro público
-        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', currentUser.uid), {
-          lastLogin: new Date().toISOString(),
-          isAnonymous: currentUser.isAnonymous
-        }, { merge: true }).catch(()=>{});
+        // Registro inicial
+        await updatePublicRegistry(currentUser, userProfile, rosterConfig);
       } else {
         try { await signInAnonymously(auth); } catch (err) { console.error(err); }
       }
@@ -114,50 +139,103 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // VERIFICACIÓN PERMANENTE
   const isPermanentlyLinked = user && !user.isAnonymous && user.email;
 
+  // --- BASE DE DATOS (SYNC EN TIEMPO REAL) ---
   useEffect(() => {
     if (!user) return;
+    
+    // 1. Escuchar la Base Pública de Usuarios Registrados (Para Sincronización)
+    const unsubPublicUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'), (s) => {
+      setPublicUsers(s.docs.map(d => d.data()));
+    }, (err) => console.log("Permiso de lectura pública activo."));
+
+    // 2. Escuchar datos privados de configuración y perfil
     const unsubRoster = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), (d) => { if (d.exists()) setRosterConfig(d.data()); });
     const unsubProfile = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), (d) => { if (d.exists()) setUserProfile(d.data()); });
     const unsubTheme = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'theme'), (d) => { if (d.exists()) setTheme(d.data().mode); });
+    
+    // 3. Listas y bitácoras
     const unsubTasks = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubGoals = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'goals'), (s) => setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubLogs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     
+    // 4. Escuchar Anuncios
     const unsubAds = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'), (d) => { 
       if (d.exists() && d.data().active) setCurrentAd(d.data()); 
       else setCurrentAd(null);
-    }, (err) => console.log("Permisos públicos de Ads pendientes."));
+    }, (err) => console.log("Esperando anuncios activos..."));
 
-    return () => { unsubRoster(); unsubProfile(); unsubTheme(); unsubTasks(); unsubGoals(); unsubLogs(); unsubFriends(); unsubAds(); };
+    return () => { 
+      unsubPublicUsers();
+      unsubRoster(); 
+      unsubProfile(); 
+      unsubTheme(); 
+      unsubTasks(); 
+      unsubGoals(); 
+      unsubLogs(); 
+      unsubFriends(); 
+      unsubAds(); 
+    };
   }, [user]);
 
+  // --- COMBINACIÓN DE DIAGRAMAS REALTIME (P2P SYNC) ---
+  const displayFriends = useMemo(() => {
+    return friends.map(f => {
+      if (f.isSynced) {
+        // Buscamos si el compañero actualizó su diagrama en la base pública
+        const liveData = publicUsers.find(u => u.syncCode === f.syncCode || u.uid === f.friendUid);
+        if (liveData) {
+          return {
+            ...f,
+            name: liveData.name || f.name,
+            workDays: liveData.workDays,
+            restDays: liveData.restDays,
+            startDate: liveData.startDate
+          };
+        }
+      }
+      return f;
+    });
+  }, [friends, publicUsers]);
+
+  // --- PANEL CEO AVANZADO ---
   useEffect(() => {
     if (!isAdmin) return;
-    const fetchUsers = async () => {
+    const fetchCEOData = async () => {
       try {
         const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'));
         let linkedCount = 0;
         let homeStats = {};
         let siteStats = {};
+        let list = [];
         
         snap.docs.forEach(d => {
           const data = d.data();
-          // CORRECCIÓN: Verificación estricta (=== false) ignorando los undefined
           if (data.isAnonymous === false) linkedCount++;
           if (data.homeProvince) homeStats[data.homeProvince] = (homeStats[data.homeProvince] || 0) + 1;
           if (data.siteProvince) siteStats[data.siteProvince] = (siteStats[data.siteProvince] || 0) + 1;
+          
+          list.push({
+            uid: d.id,
+            name: data.name || "Invitado",
+            isAnonymous: data.isAnonymous !== false,
+            homeProvince: data.homeProvince || 'No configurada',
+            siteProvince: data.siteProvince || 'No configurada',
+            lastLogin: data.lastLogin ? new Date(data.lastLogin).toLocaleDateString() : 'Desconocido'
+          });
         });
         
         setUserStats({ total: snap.size, linked: linkedCount });
-        setDemographics({ home: homeStats, site: siteStats });
-      } catch (e) { console.log("Error contando usuarios"); }
+        setDemographics({ home: homeStats, site: siteStats, list });
+      } catch (e) { console.log("Error cargando panel CEO", e); }
     };
-    fetchUsers();
-  }, [isAdmin]);
+    fetchCEOData();
+  }, [isAdmin, publicUsers]);
 
+  // --- CLIMA REAL ---
   useEffect(() => {
     const fetchWeather = async () => {
       if (!userProfile.location) return;
@@ -178,6 +256,7 @@ export default function App() {
     fetchWeather();
   }, [userProfile.location]);
 
+  // --- FINANZAS MERVAL & USA ---
   useEffect(() => {
     if (activeTab !== 'wealth' || !premiumView) return;
     const fetchMarkets = async () => {
@@ -209,6 +288,7 @@ export default function App() {
     fetchMarkets();
   }, [activeTab, premiumView]);
 
+  // --- CÁLCULO DE DIAGRAMAS ---
   const getStatusForDate = (dateStr, config) => {
     if (!dateStr || !config.startDate) return null;
     const start = new Date(config.startDate);
@@ -228,6 +308,7 @@ export default function App() {
   const currentStatus = useMemo(() => getStatusForDate(new Date().toISOString().split('T')[0], rosterConfig), [rosterConfig]);
   const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
 
+  // --- HANDLERS ACCIONES PWA ---
   const handleInstallClick = async () => {
     if (!installPrompt) return;
     installPrompt.prompt();
@@ -240,7 +321,8 @@ export default function App() {
       const provider = new GoogleAuthProvider();
       if (user && user.isAnonymous) {
         await linkWithPopup(user, provider);
-        showToast("Cuenta vinculada exitosamente.");
+        await updatePublicRegistry(auth.currentUser, userProfile, rosterConfig);
+        showToast("¡Cuenta blindada exitosamente!");
       } else {
         await signInWithPopup(auth, provider);
         showToast("Sesión iniciada con éxito.");
@@ -267,12 +349,15 @@ export default function App() {
     else { showToast("Comparte tu enlace web."); }
   };
 
+  // --- SUBMIT FORMULARIOS ---
   const updateRoster = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), {
+    const rosterData = {
       workDays: parseInt(fd.get('workDays')), restDays: parseInt(fd.get('restDays')), startDate: fd.get('startDate')
-    });
+    };
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), rosterData);
+    await updatePublicRegistry(user, userProfile, rosterData);
     showToast("Diagrama actualizado.");
   };
 
@@ -284,12 +369,50 @@ export default function App() {
       homeProvince: fd.get('homeProvince'), siteProvince: fd.get('siteProvince')
     };
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), profileData);
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', user.uid), {
-      homeProvince: profileData.homeProvince,
-      siteProvince: profileData.siteProvince,
-      lastLogin: new Date().toISOString()
-    }, { merge: true });
+    await updatePublicRegistry(user, profileData, rosterConfig);
     showToast("Perfil guardado.");
+  };
+
+  // --- MULTIJUGADOR: PROCESO REAL DE VINCULACIÓN ---
+  const handleSyncAdd = async (e) => {
+    e.preventDefault();
+    const codeInput = e.target.elements.syncCode.value.trim().toUpperCase();
+    if (!codeInput) return;
+
+    // Buscamos al compañero en el registro de usuarios en memoria (Regla 2: No Complex Queries)
+    const foundUser = publicUsers.find(u => u.syncCode === codeInput);
+    
+    if (!foundUser) {
+      showToast("Código inválido o usuario inexistente.");
+      return;
+    }
+
+    if (foundUser.uid === user.uid) {
+      showToast("No puedes sincronizarte contigo mismo.");
+      return;
+    }
+
+    // Verificar si ya fue agregado
+    const alreadyExists = friends.some(f => f.friendUid === foundUser.uid);
+    if (alreadyExists) {
+      showToast("Este compañero ya está en tu lista.");
+      return;
+    }
+
+    try {
+      // Guardar relación en el perfil del usuario activo
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), {
+        name: foundUser.name || "Compañero Sincronizado",
+        friendUid: foundUser.uid,
+        syncCode: foundUser.syncCode,
+        isSynced: true,
+        createdAt: new Date().toISOString()
+      });
+      showToast(`¡Sincronizado con ${foundUser.name}!`);
+      e.target.reset();
+    } catch (err) {
+      showToast("Error al guardar vinculación.");
+    }
   };
 
   const toggleTheme = async (newTheme) => {
@@ -310,6 +433,7 @@ export default function App() {
     await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'goals', goal.id), { ...goal, current: newAmount > goal.target ? goal.target : newAmount });
   };
 
+  // --- SMART AD ENGINE (CEO) ---
   const launchAd = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -321,20 +445,19 @@ export default function App() {
         active: true,
         updatedAt: new Date().toISOString()
       });
-      showToast("¡Campaña activada con éxito!");
+      showToast("¡Anuncio publicado al aire!");
       e.target.reset();
-    } catch (err) {
-      showToast("Error: Revisa las Reglas de Firebase.");
-    }
+    } catch (err) { showToast("Error en permisos públicos de anuncios."); }
   };
 
   const deleteAd = async () => {
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'));
-      showToast("Campaña eliminada permanentemente.");
-    } catch (err) { showToast("Error al eliminar campaña."); }
+      showToast("Anuncio removido.");
+    } catch (err) { showToast("Error al remover anuncio."); }
   };
 
+  // --- BÓVEDA CEO ---
   const [clickCount, setClickCount] = useState(0);
   const handleLogoClick = () => {
     setClickCount(prev => prev + 1);
@@ -347,13 +470,14 @@ export default function App() {
     else { setVaultError(true); }
   };
 
+  // --- ESTILOS DE INTERFAZ ---
   const dynamicTheme = theme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-slate-100';
   const cardClasses = {
     dark: 'bg-slate-900/60 border-slate-800 backdrop-blur-xl',
     light: 'bg-white border-slate-200 shadow-sm'
   };
   const textMuted = theme === 'light' ? 'text-slate-500' : 'text-slate-400';
-  const inputBg = theme === 'light' ? 'bg-slate-50 border-slate-200 text-slate-900' : 'bg-slate-950/50 border-slate-700 text-white';
+  const inputBg = theme === 'light' ? 'bg-slate-100 border-slate-200 text-slate-900' : 'bg-slate-950/50 border-slate-700 text-white';
 
   const getTransportIcon = (type) => {
     if (type === 'Vuelo') return <Plane size={24} className="mb-2"/>;
@@ -375,6 +499,7 @@ export default function App() {
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
       
+      {/* NOTIFICACIONES TOAST */}
       {toast && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-emerald-500 text-white px-5 py-2.5 rounded-full font-bold shadow-xl z-[100] text-sm animate-in slide-in-from-top-4 flex items-center">
           <CheckCircle2 size={16} className="mr-2"/> {toast}
@@ -416,7 +541,6 @@ export default function App() {
 
       <main className="max-w-md mx-auto p-4 space-y-6">
         
-        {}
         {installPrompt && (
           <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
             <div><p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p><p className={`text-xs mt-0.5 ${textMuted}`}>Añade la app a tu pantalla de inicio.</p></div>
@@ -424,7 +548,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 1: ROSTER */}
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className={`relative overflow-hidden rounded-3xl border p-6 ${cardClasses[theme]}`}>
@@ -442,7 +566,7 @@ export default function App() {
               </div>
             </div>
 
-            {}
+            {/* MOTOR DE ANUNCIOS SMART */}
             {shouldShowAd && (
               <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative animate-in fade-in slide-in-from-top-4">
                  <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
@@ -469,7 +593,6 @@ export default function App() {
                </div>
             </div>
 
-            {}
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex flex-col mb-4">
                 <div className="flex items-center"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de Relevo</h3></div>
@@ -491,7 +614,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 2: CREW */}
         {activeTab === 'crew' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
@@ -512,7 +635,7 @@ export default function App() {
                       <span className={`text-xs font-bold px-2 py-1 rounded ${targetStatus.isWorking ? 'text-amber-600 bg-amber-500/20' : 'text-emerald-600 bg-emerald-500/20'}`}>{targetStatus.isWorking ? 'Trabajando' : 'De Franco 🎉'}</span>
                     </div>
                   )}
-                  {friends.map(friend => {
+                  {displayFriends.map(friend => {
                     const status = getStatusForDate(targetDate, friend);
                     if (!status) return null;
                     const isCoincidence = !targetStatus?.isWorking && !status.isWorking;
@@ -527,7 +650,6 @@ export default function App() {
               )}
             </div>
 
-            {}
             <button onClick={shareMyCode} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
                <Smartphone size={18} />
                <span className="font-bold text-sm">Enviar mi código a un contacto</span>
@@ -547,16 +669,16 @@ export default function App() {
                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors mt-2">Guardar Manualmente</button>
                   </form>
                 ) : (
-                  <form onSubmit={(e) => { e.preventDefault(); showToast("La sincronización P2P está en fase Beta."); }} className="space-y-4 animate-in fade-in">
+                  <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
                     <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-XXXXX" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
                   </form>
                 )}
               </div>
             </div>
             
-            {friends.length > 0 && (
+            {displayFriends.length > 0 && (
               <div className="space-y-2">
-                {friends.map(friend => (
+                {displayFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
                     <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className="ml-1.5 text-blue-400"/>}</p><p className={`text-xs ${textMuted}`}>Esquema: {friend.workDays}x{friend.restDays}</p></div>
                     <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'friends', friend.id))} className="text-slate-500 hover:text-red-400 p-2"><Trash2 size={16}/></button>
@@ -567,7 +689,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 3: PLANNER */}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
@@ -588,7 +710,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 4: WEALTH */}
         {activeTab === 'wealth' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="flex justify-between items-center mb-6">
@@ -635,7 +757,6 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-4 animate-in slide-in-from-left-4">
-                 {}
                  <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-2xl p-5 text-white shadow-xl border border-indigo-500/30 relative overflow-hidden">
                     <div className="absolute right-0 top-0 opacity-10"><TrendingUp size={100} /></div>
                     <h3 className="font-black text-lg mb-1 flex items-center"><LineChart size={18} className="mr-2 text-indigo-400"/> Mercado USA (Wall Street)</h3>
@@ -683,7 +804,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 5: SETTINGS */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             
@@ -692,7 +813,7 @@ export default function App() {
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
             
-            {/* ESTADO DE CUENTA INTELIGENTE (VERIFICACIÓN SEGURA ABSOLUTA) */}
+            {/* ESTADO DE CUENTA INTELIGENTE */}
             {isPermanentlyLinked ? (
               <div className={`rounded-2xl border p-5 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/30'} flex flex-col shadow-sm`}>
                  <div className="flex items-center justify-between">
@@ -724,7 +845,7 @@ export default function App() {
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
                <div><p className={`text-xs font-bold uppercase tracking-wider text-blue-500`}>Tu Código RosterMax</p><p className="font-mono text-lg tracking-widest mt-1">RM-{user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}</p></div>
-               <button onClick={shareMyCode} className={`p-2 rounded-lg border active:scale-90 transition-transform ${theme==='light'?'bg-white border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
+               <button onClick={shareMyCode} className={`p-2 rounded-lg border active:scale-90 transition-transform ${theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
@@ -776,7 +897,7 @@ export default function App() {
           </div>
         )}
 
-        {}
+        {/* TAB 6: ADMIN DASHBOARD (CEO) */}
         {activeTab === 'admin' && isAdmin && (
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
              <div className="mb-6">
@@ -818,12 +939,36 @@ export default function App() {
                 </div>
              </div>
 
+             {/* LISTADO DE USUARIOS REGISTRADOS */}
+             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+                <h3 className="font-bold flex items-center mb-4"><Users size={18} className="mr-2 text-blue-500"/> Registro de Usuarios</h3>
+                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+                  {demographics.list && demographics.list.length > 0 ? demographics.list.map(u => (
+                    <div key={u.uid} className={`p-3 rounded-xl border text-xs flex flex-col space-y-1 ${theme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold truncate max-w-[65%]">{u.name}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${u.isAnonymous ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500'}`}>
+                          {u.isAnonymous ? 'Invitado' : 'PRO'}
+                        </span>
+                      </div>
+                      <div className={`text-[10px] ${textMuted} flex flex-col space-y-0.5`}>
+                        <p>Origen: <span className="font-semibold text-inherit">{u.homeProvince}</span></p>
+                        <p>Yacimiento: <span className="font-semibold text-inherit">{u.siteProvince}</span></p>
+                        <p>Último ingreso: <span className="font-semibold text-inherit">{u.lastLogin}</span></p>
+                      </div>
+                    </div>
+                  )) : (
+                    <p className="text-xs italic opacity-50 text-center py-4">No hay usuarios registrados aún.</p>
+                  )}
+                </div>
+             </div>
+
              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
-               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Target size={18} className="mr-2"/> Smart Ad Engine</h3>
+               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Megaphone size={18} className="mr-2"/> Smart Ad Engine</h3>
                
                {/* VISTA DE LA CAMPAÑA ACTIVA */}
                {currentAd ? (
-                 <div className="bg-slate-900 border border-amber-500/50 p-4 rounded-xl mb-6 shadow-lg shadow-amber-500/10">
+                 <div className="bg-slate-900 border border-amber-500/50 p-4 rounded-xl mb-6 shadow-lg shadow-amber-500/10 text-white">
                     <div className="flex items-center justify-between mb-2">
                        <p className="text-[10px] uppercase tracking-widest text-amber-500 font-bold flex items-center"><span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span> Al Aire</p>
                     </div>
@@ -848,7 +993,7 @@ export default function App() {
 
       </main>
 
-      <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'} backdrop-blur-xl`}>
+      <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'}`}>
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">
           <button onClick={() => setActiveTab('roster')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'roster' ? 'text-emerald-500' : textMuted}`}><Calendar size={20} /><span className="text-[9px] font-bold">Roster</span></button>
           <button onClick={() => setActiveTab('crew')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'crew' ? 'text-blue-500' : textMuted}`}><Users size={20} /><span className="text-[9px] font-bold">Equipo</span></button>
