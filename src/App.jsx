@@ -7,23 +7,27 @@ import {
   Plane, Thermometer, Zap, Wind,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
   CloudOff, ShieldAlert, Globe, Download, Send, Smartphone, LineChart,
-  Megaphone, Bell, BellRing, Clock3, Link2
+  Megaphone, Bell, BellRing, Clock3, Link2, LogIn, LogOut,
+  ExternalLink, MessageSquare, PauseCircle
 } from 'lucide-react';
 import { 
   signInAnonymously, onAuthStateChanged, getIdTokenResult,
-  GoogleAuthProvider, signInWithPopup, linkWithPopup,
+  GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut,
 } from 'firebase/auth';
 import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { APP_ID, auth, db } from './lib/firebase';
-import { getNextTransition, getStatusForDate, validateRosterConfig } from './lib/roster';
+import { addDaysToDate, getNextTransition, getStatusForDate, validateRosterConfig } from './lib/roster';
 import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
 import { fetchCurrentWeather, searchWeatherLocations } from './lib/weather';
 import { findRestCoincidences } from './lib/coincidences';
 import { getTransitionReminder } from './lib/reminders';
 import { getGoalProjection } from './lib/finance';
+import { getAuthErrorMessage } from './lib/auth';
+import { selectActiveCampaign, validateCampaign } from './lib/ads';
 import OnboardingModal from './components/OnboardingModal';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
+const PUBLIC_APP_URL = import.meta.env.VITE_PUBLIC_APP_URL || 'https://rostermax.vercel.app';
 
 function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
@@ -101,9 +105,13 @@ export default function App() {
   // States: UX, PWA, Admin & Auth
   const [toast, setToast] = useState('');
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [hasAdminClaim, setHasAdminClaim] = useState(false);
+  const [hasAdminRecord, setHasAdminRecord] = useState(false);
+  const isAdmin = hasAdminClaim || hasAdminRecord;
   const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [showExistingAccountConfirm, setShowExistingAccountConfirm] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   
   // Data States
@@ -120,7 +128,8 @@ export default function App() {
   const [pendingInvite, setPendingInvite] = useState(() => ({ loading: Boolean(getInviteCodeFromLocation()), data: null, error: '' }));
   const [reminderSettings, setReminderSettings] = useState({ enabled: false, leadDays: 1 });
   const [targetDate, setTargetDate] = useState('');
-  const [currentAd, setCurrentAd] = useState(null);
+  const [ads, setAds] = useState([]);
+  const [feedbackItems, setFeedbackItems] = useState([]);
 
   // API States
   const [weatherData, setWeatherData] = useState({ temp: '--', loading: false, error: '' });
@@ -168,7 +177,8 @@ export default function App() {
       if (currentUser) {
         try {
           const token = await getIdTokenResult(currentUser);
-          setIsAdmin(token.claims.admin === true);
+          setHasAdminClaim(token.claims.admin === true);
+          setHasAdminRecord(false);
           setUser(currentUser);
           setAuthMsg('');
         } catch (error) {
@@ -189,6 +199,19 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    return onSnapshot(
+      doc(db, 'artifacts', APP_ID, 'admins', user.uid),
+      (snapshot) => setHasAdminRecord(snapshot.exists() && snapshot.data().active === true),
+      (error) => {
+        console.error('No se pudo comprobar el rol administrativo.', error);
+        setHasAdminRecord(false);
+      },
+    );
+  }, [user]);
 
   // VERIFICACIÓN PERMANENTE
   const isPermanentlyLinked = user && !user.isAnonymous && user.email;
@@ -279,9 +302,8 @@ export default function App() {
     const unsubLogs = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('bitácora'));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('compañeros'));
     
-    const unsubAds = onSnapshot(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'), (d) => {
-      if (d.exists() && d.data().active) setCurrentAd(d.data()); 
-      else setCurrentAd(null);
+    const unsubAds = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'ads'), (snapshot) => {
+      setAds(snapshot.docs.map((adDoc) => ({ id: adDoc.id, ...adDoc.data() })));
     }, logRealtimeError('anuncios'));
 
     return () => { 
@@ -297,6 +319,18 @@ export default function App() {
       unsubAds(); 
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !isAdmin) return undefined;
+
+    return onSnapshot(
+      collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedback'),
+      (snapshot) => setFeedbackItems(snapshot.docs
+        .map((feedbackDoc) => ({ id: feedbackDoc.id, ...feedbackDoc.data() }))
+        .sort((left, right) => Number(right.createdAt?.seconds || 0) - Number(left.createdAt?.seconds || 0))),
+      (error) => console.error('No se pudo cargar el feedback de beta.', error),
+    );
+  }, [user, isAdmin]);
 
   // Solo escucha los códigos que el usuario agregó explícitamente.
   useEffect(() => {
@@ -459,6 +493,14 @@ export default function App() {
     displayFriends.filter((friend) => friend.syncAvailable !== false),
     { horizonDays: 120, maxResults: 6 },
   ), [rosterConfig, displayFriends]);
+  const currentAd = useMemo(
+    () => selectActiveCampaign(ads, userProfile, getTodayDate()),
+    [ads, userProfile],
+  );
+  const activeAdCount = useMemo(
+    () => ads.filter((ad) => ad.active === true && (!ad.endDate || ad.endDate >= getTodayDate())).length,
+    [ads],
+  );
 
   // --- HANDLERS ACCIONES PWA ---
   const handleInstallClick = async () => {
@@ -468,22 +510,46 @@ export default function App() {
     if (outcome === 'accepted') setInstallPrompt(null);
   };
 
-  const linkWithGoogle = async () => {
+  const linkNewGoogleAccount = async () => {
+    if (!user?.isAnonymous) return;
+    setAuthBusy(true);
+    setAuthMsg('');
     try {
       const provider = new GoogleAuthProvider();
-      if (user && user.isAnonymous) {
-        await linkWithPopup(user, provider);
-        showToast("¡Cuenta blindada exitosamente!");
-      } else {
-        await signInWithPopup(auth, provider);
-        showToast("Sesión iniciada con éxito.");
-      }
-    } catch (error) { 
-      if (error.code === 'auth/credential-already-in-use') {
-        showToast("Este correo ya está registrado.");
-      } else {
-        showToast("Conexión cancelada."); 
-      }
+      await linkWithPopup(user, provider);
+      showToast('Cuenta guardada con Google.');
+    } catch (error) {
+      console.error('No se pudo vincular Google.', error);
+      setAuthMsg(getAuthErrorMessage(error));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signIntoExistingGoogleAccount = async () => {
+    setShowExistingAccountConfirm(false);
+    setAuthBusy(true);
+    setAuthMsg('');
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      showToast('Ingresaste a tu cuenta existente.');
+    } catch (error) {
+      console.error('No se pudo iniciar sesión con Google.', error);
+      setAuthMsg(getAuthErrorMessage(error));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      setActiveTab('roster');
+      showToast('Sesión cerrada.');
+    } catch (error) {
+      console.error('No se pudo cerrar la sesión.', error);
+      showToast('No se pudo cerrar la sesión.');
     }
   };
 
@@ -492,9 +558,7 @@ export default function App() {
       showToast('Tu código todavía se está preparando.');
       return;
     }
-    const inviteUrl = new URL(window.location.href);
-    inviteUrl.search = '';
-    inviteUrl.hash = '';
+    const inviteUrl = new URL(PUBLIC_APP_URL);
     inviteUrl.searchParams.set('sync', syncCode);
     const shareData = {
       title: 'Mi roster en RosterMax',
@@ -510,7 +574,7 @@ export default function App() {
   };
 
   const shareApp = async () => {
-    const shareData = { title: 'RosterMax', text: '¡Instala RosterMax! La app para gestionar nuestro diagrama.', url: window.location.origin };
+    const shareData = { title: 'RosterMax', text: '¡Instala RosterMax! La app para gestionar nuestro diagrama.', url: PUBLIC_APP_URL };
     if (navigator.share) { try { await navigator.share(shareData); } catch { /* El usuario canceló el diálogo. */ } }
     else { showToast("Comparte tu enlace web."); }
   };
@@ -727,10 +791,11 @@ export default function App() {
     if(user) await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), { mode: newTheme });
   };
 
-  const addGenericDoc = async (e, collectionName, fields) => {
-    e.preventDefault();
+  const addGenericDoc = async (event, collectionName, fields) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
     await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() });
-    e.target.reset();
+    formElement.reset();
   };
 
   const toggleLog = async (log) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { ...log, resolved: !log.resolved });
@@ -786,33 +851,77 @@ export default function App() {
     }
   };
 
-  // --- SMART AD ENGINE (CEO) ---
-  const launchAd = async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
+  const submitBetaFeedback = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const message = String(form.get('message') || '').trim();
+    if (message.length < 5) {
+      showToast('Cuéntanos un poco más para poder ayudarte.');
+      return;
+    }
     try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'), {
-        company: fd.get('adCompany'),
-        title: fd.get('adTitle'),
-        location: fd.get('adLocation').toLowerCase(),
-        active: true,
-        updatedAt: serverTimestamp(),
+      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedback'), {
+        ownerUid: user.uid,
+        name: getPublicName(user, userProfile),
+        category: String(form.get('category') || 'idea').slice(0, 20),
+        message: message.slice(0, 800),
+        status: 'new',
+        createdAt: serverTimestamp(),
       });
-      showToast("¡Anuncio publicado al aire!");
-      e.target.reset();
+      formElement.reset();
+      showToast('Gracias. Recibimos tu comentario de beta.');
     } catch (error) {
-      console.error('No se pudo publicar el anuncio.', error);
-      showToast("Error en permisos públicos de anuncios.");
+      console.error('No se pudo enviar el feedback.', error);
+      showToast('No se pudo enviar el comentario.');
     }
   };
 
-  const deleteAd = async () => {
+  // --- SMART AD ENGINE (CEO) ---
+  const launchAd = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const validation = validateCampaign({
+      company: form.get('adCompany'),
+      title: form.get('adTitle'),
+      location: form.get('adLocation'),
+      cta: form.get('adCta'),
+      url: form.get('adUrl'),
+      startDate: form.get('adStartDate'),
+      endDate: form.get('adEndDate'),
+    });
+    if (!validation.valid) {
+      showToast(validation.error);
+      return;
+    }
     try {
-      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'));
-      showToast("Anuncio removido.");
+      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'ads'), {
+        ...validation.campaign,
+        active: true,
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Campaña patrocinada publicada.');
+      formElement.reset();
     } catch (error) {
-      console.error('No se pudo remover el anuncio.', error);
-      showToast("Error al remover anuncio.");
+      console.error('No se pudo publicar el anuncio.', error);
+      showToast('No se pudo publicar la campaña. Revisa tu rol administrador.');
+    }
+  };
+
+  const pauseAd = async (adId) => {
+    try {
+      await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', adId), {
+        active: false,
+        pausedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      showToast('Campaña pausada.');
+    } catch (error) {
+      console.error('No se pudo pausar el anuncio.', error);
+      showToast('No se pudo pausar la campaña.');
     }
   };
 
@@ -831,7 +940,7 @@ export default function App() {
     return <BriefcaseBusiness size={24} className="mb-2"/>; 
   };
 
-  const shouldShowAd = currentAd && (currentAd.location === 'todos' || currentAd.location.includes(userProfile.location?.toLowerCase()));
+  const shouldShowAd = Boolean(currentAd);
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>;
 
@@ -847,6 +956,19 @@ export default function App() {
           onComplete={completeOnboarding}
           onSkip={skipOnboarding}
         />
+      )}
+      {showExistingAccountConfirm && (
+        <div className="fixed inset-0 z-[130] bg-slate-950/80 backdrop-blur-sm p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="existing-account-title">
+          <div className={`w-full max-w-sm rounded-3xl border p-6 shadow-2xl ${cardClasses[theme]}`}>
+            <div className="h-12 w-12 rounded-2xl bg-blue-500/15 text-blue-500 flex items-center justify-center mb-4"><LogIn size={24}/></div>
+            <h2 id="existing-account-title" className="text-xl font-black">Ingresar a una cuenta existente</h2>
+            <p className={`text-sm mt-3 leading-relaxed ${textMuted}`}>Verás los datos guardados en esa cuenta de Google. La información creada en esta sesión invitada no se combinará automáticamente.</p>
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button type="button" onClick={() => setShowExistingAccountConfirm(false)} className={`rounded-xl border py-3 text-sm font-bold ${inputBg}`}>Cancelar</button>
+              <button type="button" onClick={signIntoExistingGoogleAccount} className="rounded-xl bg-blue-500 py-3 text-sm font-bold text-white">Continuar</button>
+            </div>
+          </div>
+        </div>
       )}
       
       {/* NOTIFICACIONES TOAST */}
@@ -920,14 +1042,15 @@ export default function App() {
 
             {/* MOTOR DE ANUNCIOS SMART */}
             {shouldShowAd && (
-              <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative animate-in fade-in slide-in-from-top-4">
-                 <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')] opacity-10"></div>
-                 <div className="relative z-10">
-                   <p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Target size={10} className="mr-1"/> Sponsor {userProfile.location}</p>
+              <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 overflow-hidden relative animate-in fade-in slide-in-from-top-4">
+                 <div className="relative z-10 min-w-0">
+                   <p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Megaphone size={10} className="mr-1"/> Contenido patrocinado</p>
                    <p className="font-bold text-white text-sm">{currentAd.title}</p>
                    <p className="text-xs text-blue-200 mt-0.5">{currentAd.company}</p>
                  </div>
-                 <ChevronRight className="text-blue-400 relative z-10"/>
+                 {currentAd.url && (
+                   <a href={currentAd.url} target="_blank" rel="noopener noreferrer sponsored" className="ml-3 flex-shrink-0 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl px-3 py-2 text-xs font-bold relative z-10 flex items-center">{currentAd.cta || 'Ver oferta'}<ExternalLink size={12} className="ml-1.5"/></a>
+                 )}
               </div>
             )}
 
@@ -1254,18 +1377,22 @@ export default function App() {
                  </div>
                  {user.email && (
                    <div className={`mt-3 pt-3 border-t ${theme === 'light' ? 'border-emerald-200' : 'border-emerald-500/20'}`}>
-                     <p className={`text-xs font-bold flex items-center ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}><User size={12} className="mr-1"/> {user.email}</p>
+                     <div className="flex items-center justify-between gap-3">
+                       <p className={`text-xs font-bold flex items-center min-w-0 truncate ${theme === 'light' ? 'text-slate-600' : 'text-slate-400'}`}><User size={12} className="mr-1 flex-shrink-0"/> {user.email}</p>
+                       <button type="button" onClick={handleSignOut} className="text-[10px] font-bold text-red-400 flex items-center whitespace-nowrap"><LogOut size={12} className="mr-1"/> Cerrar sesión</button>
+                     </div>
                    </div>
                  )}
               </div>
             ) : (
               <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-amber-500/30 bg-amber-500/5`}>
                 <h3 className="font-bold flex items-center mb-2"><AlertCircle size={18} className="mr-2 text-amber-500"/> Modo Invitado</h3>
-                <p className={`text-[10px] mb-4 ${textMuted}`}>Si borras el historial, perderás tus datos. Vincula tu cuenta para hacer un respaldo en la nube.</p>
-                <button onClick={linkWithGoogle} className="w-full flex items-center justify-center bg-white text-slate-900 border border-slate-200 font-bold py-2.5 rounded-xl transition-all shadow-sm active:scale-95 text-sm">
+                <p className={`text-[10px] mb-4 ${textMuted}`}>Guarda esta sesión por primera vez o ingresa a una cuenta que ya utilizaste en otro dispositivo.</p>
+                <button onClick={linkNewGoogleAccount} disabled={authBusy} className="w-full flex items-center justify-center bg-white text-slate-900 border border-slate-200 font-bold py-2.5 rounded-xl transition-all shadow-sm active:scale-95 text-sm disabled:opacity-60">
                   <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                  Continuar con Google
+                  {authBusy ? 'Conectando…' : 'Guardar con Google'}
                 </button>
+                <button type="button" onClick={() => setShowExistingAccountConfirm(true)} disabled={authBusy} className={`w-full mt-2 flex items-center justify-center border font-bold py-2.5 rounded-xl transition-all active:scale-95 text-sm disabled:opacity-60 ${theme === 'light' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-blue-500/10 border-blue-500/30 text-blue-300'}`}><LogIn size={16} className="mr-2"/> Ya tengo cuenta</button>
                 {authMsg && <p className="text-[10px] mt-2 font-bold text-center text-amber-500">{authMsg}</p>}
               </div>
             )}
@@ -1307,6 +1434,20 @@ export default function App() {
               <div><p className="font-bold text-sm">Volver a ver la guía inicial</p><p className={`text-[10px] mt-0.5 ${textMuted}`}>Reconfigura tu diagrama y nombre paso a paso.</p></div>
               <ChevronRight size={18} className={textMuted}/>
             </button>
+
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <h3 className="font-bold flex items-center"><MessageSquare size={18} className="mr-2 text-blue-500"/> Feedback de la beta</h3>
+              <p className={`text-[10px] mt-1 mb-4 ${textMuted}`}>Cuéntanos qué falló o qué función necesitas. No incluyas datos sensibles.</p>
+              <form onSubmit={submitBetaFeedback} className="space-y-3">
+                <select name="category" className={`w-full rounded-xl px-3 py-2 text-sm border outline-none ${inputBg}`} defaultValue="problem">
+                  <option value="problem">Encontré un problema</option>
+                  <option value="idea">Tengo una idea</option>
+                  <option value="question">Tengo una duda</option>
+                </select>
+                <textarea name="message" minLength="5" maxLength="800" rows="3" placeholder="Describe brevemente lo que pasó…" className={`w-full rounded-xl px-3 py-2 text-sm border outline-none resize-none ${inputBg}`} required/>
+                <button className="w-full rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-500 py-2.5 text-sm font-bold">Enviar comentario</button>
+              </form>
+            </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos Laborales</h3>
@@ -1387,44 +1528,60 @@ export default function App() {
         {/* TAB 6: ADMIN DASHBOARD (CEO) */}
         {activeTab === 'admin' && isAdmin && (
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
-             <div className="mb-6">
-                <HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" theme={theme} />
-             </div>
+            <div className="mb-6"><HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" theme={theme} /></div>
 
-             <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-emerald-500`}>
-               <p className="font-bold text-emerald-500 flex items-center"><ShieldAlert size={18} className="mr-2"/> Acceso verificado por servidor</p>
-               <p className={`text-xs mt-2 ${textMuted}`}>Este panel solo aparece cuando Firebase entrega el rol administrativo. Las métricas individuales fueron retiradas para proteger la privacidad de los trabajadores.</p>
-               <div className="mt-4 flex items-center justify-between">
-                 <span className={`text-xs ${textMuted}`}>Campañas activas</span>
-                 <span className="text-xl font-black text-amber-500">{currentAd ? '1' : '0'}</span>
-               </div>
-             </div>
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-emerald-500`}>
+              <p className="font-bold text-emerald-500 flex items-center"><ShieldAlert size={18} className="mr-2"/> Propietario verificado</p>
+              <p className={`text-xs mt-2 ${textMuted}`}>El acceso se valida mediante un registro privado en Firestore. Ningún usuario puede darse permisos desde la aplicación.</p>
+              <div className="grid grid-cols-2 gap-3 mt-4">
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[10px] ${textMuted}`}>Campañas activas</p><p className="text-2xl font-black text-amber-500">{activeAdCount}</p></div>
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-blue-50' : 'bg-blue-500/10'}`}><p className={`text-[10px] ${textMuted}`}>Feedback recibido</p><p className="text-2xl font-black text-blue-500">{feedbackItems.length}</p></div>
+              </div>
+            </div>
 
-             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">
-               <h3 className="font-bold flex items-center mb-4 text-amber-500"><Megaphone size={18} className="mr-2"/> Smart Ad Engine</h3>
-               
-               {/* VISTA DE LA CAMPAÑA ACTIVA */}
-               {currentAd ? (
-                 <div className="bg-slate-900 border border-amber-500/50 p-4 rounded-xl mb-6 shadow-lg shadow-amber-500/10 text-white">
-                    <div className="flex items-center justify-between mb-2">
-                       <p className="text-[10px] uppercase tracking-widest text-amber-500 font-bold flex items-center"><span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span> Al Aire</p>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
+              <h3 className="font-bold flex items-center mb-1 text-amber-500"><Megaphone size={18} className="mr-2"/> Nueva campaña patrocinada</h3>
+              <p className={`text-[10px] mb-4 ${textMuted}`}>Para la beta, tú cargas y pausas cada campaña. La segmentación se evalúa en el dispositivo y no entrega datos del trabajador al anunciante.</p>
+              <form onSubmit={launchAd} className="space-y-3">
+                <input name="adCompany" type="text" maxLength="80" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                <input name="adTitle" type="text" maxLength="120" placeholder="Oferta (Ej. 20% en mantenimiento)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                <div className="grid grid-cols-2 gap-2">
+                  <input name="adLocation" type="text" maxLength="80" placeholder="Zona o Todos" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                  <input name="adCta" type="text" maxLength="30" defaultValue="Ver oferta" aria-label="Texto del botón" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                </div>
+                <input name="adUrl" type="url" placeholder="https://comercio.com/oferta" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                <div className="grid grid-cols-2 gap-2">
+                  <label className={`text-[10px] font-bold ${textMuted}`}>Desde<input name="adStartDate" type="date" defaultValue={getTodayDate()} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></label>
+                  <label className={`text-[10px] font-bold ${textMuted}`}>Hasta<input name="adEndDate" type="date" defaultValue={addDaysToDate(getTodayDate(), 30)} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></label>
+                </div>
+                <button type="submit" className="w-full bg-amber-500 text-slate-900 font-bold py-3 rounded-xl text-sm hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20 active:scale-95">Publicar campaña</button>
+              </form>
+            </div>
+
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <h3 className="font-bold mb-4">Campañas</h3>
+              {ads.length === 0 ? <p className={`text-xs ${textMuted}`}>Todavía no creaste campañas.</p> : (
+                <div className="space-y-3">
+                  {ads.map((ad) => (
+                    <div key={ad.id} className={`rounded-xl border p-4 ${ad.active ? 'border-emerald-500/30' : theme === 'light' ? 'border-slate-200 opacity-60' : 'border-slate-700 opacity-60'}`}>
+                      <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-bold truncate">{ad.title}</p><p className={`text-[10px] ${textMuted}`}>{ad.company} · {ad.location}</p><p className={`text-[10px] mt-1 ${textMuted}`}>{ad.startDate || 'Sin fecha'} — {ad.endDate || 'Sin fecha'}</p></div><span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${ad.active ? 'bg-emerald-500/15 text-emerald-500' : 'bg-slate-500/15 text-slate-500'}`}>{ad.active ? 'Activa' : 'Pausada'}</span></div>
+                      {ad.active && <button type="button" onClick={() => pauseAd(ad.id)} className="mt-3 w-full rounded-lg border border-red-500/20 text-red-400 py-2 text-xs font-bold flex items-center justify-center"><PauseCircle size={14} className="mr-1.5"/> Pausar campaña</button>}
                     </div>
-                    <p className="font-bold text-white text-lg">{currentAd.title}</p>
-                    <p className="text-sm text-slate-400 mb-4">{currentAd.company} • Objetivo: {currentAd.location}</p>
-                    <button onClick={deleteAd} className="w-full flex items-center justify-center bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 font-bold py-2 rounded-lg text-sm transition-colors"><Trash2 size={16} className="mr-2"/> Detener y Eliminar</button>
-                 </div>
-               ) : (
-                 <p className="text-xs text-slate-400 mb-6 italic border-l-2 border-slate-600 pl-3">No hay campañas activas en este momento.</p>
-               )}
+                  ))}
+                </div>
+              )}
+            </div>
 
-               <form onSubmit={launchAd} className="space-y-3 pt-2 border-t border-amber-500/20">
-                 <p className="text-xs text-amber-500 font-bold mb-2">{currentAd ? 'Reemplazar con Nueva Campaña:' : 'Crear Nueva Campaña:'}</p>
-                 <input name="adCompany" type="text" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <input name="adTitle" type="text" placeholder="Título (Ej. 20% Off Pastillas)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <input name="adLocation" type="text" placeholder="Locación Objetivo (Ej. Neuquén, o 'Todos')" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                 <button type="submit" className="w-full mt-4 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl text-sm hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20 active:scale-95">{currentAd ? 'Reemplazar Campaña' : 'Lanzar Campaña'}</button>
-               </form>
-             </div>
+            <div className={`rounded-2xl border p-5 mb-10 ${cardClasses[theme]}`}>
+              <h3 className="font-bold flex items-center mb-4"><MessageSquare size={18} className="mr-2 text-blue-500"/> Comentarios de beta</h3>
+              {feedbackItems.length === 0 ? <p className={`text-xs ${textMuted}`}>Todavía no recibiste comentarios.</p> : (
+                <div className="space-y-3">
+                  {feedbackItems.slice(0, 20).map((item) => (
+                    <div key={item.id} className={`rounded-xl p-3 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div className="flex justify-between gap-2"><p className="text-xs font-bold">{item.name || 'Usuario beta'}</p><span className="text-[9px] uppercase text-blue-500 font-bold">{item.category}</span></div><p className={`text-xs mt-2 whitespace-pre-wrap ${textMuted}`}>{item.message}</p></div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -10,8 +10,14 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == userId;
     }
 
-    function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+    function isAdmin(appId) {
+      return signedIn() && (
+        request.auth.token.admin == true
+        || (
+          exists(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid))
+          && get(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid)).data.active == true
+        )
+      );
     }
 
     function validSharedRoster(data, code) {
@@ -34,7 +40,47 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function validAd(data) {
+      return data.keys().hasAll([
+          'company', 'title', 'location', 'cta', 'url', 'startDate', 'endDate',
+          'active', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'company', 'title', 'location', 'cta', 'url', 'startDate', 'endDate',
+          'active', 'createdBy', 'createdAt', 'updatedAt', 'pausedAt'
+        ])
+        && data.company is string && data.company.size() > 0 && data.company.size() <= 80
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 120
+        && data.location is string && data.location.size() > 0 && data.location.size() <= 80
+        && data.cta is string && data.cta.size() > 0 && data.cta.size() <= 30
+        && data.url is string && data.url.size() <= 500 && data.url.matches('^https://.*')
+        && data.startDate is string && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.endDate is string && data.endDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.startDate <= data.endDate
+        && data.active is bool
+        && data.createdBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validFeedback(data) {
+      return data.keys().hasOnly(['ownerUid', 'name', 'category', 'message', 'status', 'createdAt'])
+        && data.ownerUid == request.auth.uid
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 40
+        && data.category is string && data.category.size() > 0 && data.category.size() <= 20
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 800
+        && data.status == 'new'
+        && data.createdAt is timestamp;
+    }
+
     match /artifacts/{appId} {
+      // El registro de administradores se crea únicamente desde la consola o
+      // un entorno servidor. Cada usuario solo puede comprobar su propio rol.
+      match /admins/{userId} {
+        allow get: if owns(userId);
+        allow list, create, update, delete: if false;
+      }
+
       // Cada usuario solo puede leer y modificar su propio espacio privado.
       match /users/{userId}/{document=**} {
         allow read, write: if owns(userId);
@@ -50,14 +96,22 @@ service cloud.firestore {
           && resource.data.ownerUid == request.auth.uid
           && validSharedRoster(request.resource.data, code);
         allow delete: if signedIn()
-          && (resource.data.ownerUid == request.auth.uid || isAdmin());
+          && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
       }
 
       // Todos los usuarios autenticados pueden ver campañas, pero solamente
-      // una identidad con Custom Claim admin puede administrarlas.
+      // una identidad registrada como administradora puede administrarlas.
       match /public/data/ads/{adId} {
         allow read: if signedIn();
-        allow write: if isAdmin();
+        allow create: if isAdmin(appId) && validAd(request.resource.data);
+        allow update, delete: if isAdmin(appId);
+      }
+
+      // Los participantes de la beta pueden enviar comentarios sin exponer
+      // una lista pública. Solo el administrador puede leerlos o moderarlos.
+      match /public/data/feedback/{feedbackId} {
+        allow create: if signedIn() && validFeedback(request.resource.data);
+        allow read, update, delete: if isAdmin(appId);
       }
 
       // Bloquea el registro global usado por versiones anteriores.

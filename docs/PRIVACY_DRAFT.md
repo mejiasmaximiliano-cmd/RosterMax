@@ -20,10 +20,11 @@ RosterMax puede almacenar:
 - compañeros agregados y códigos de sincronización;
 - localidad y coordenadas elegidas para consultar el clima.
 - preferencia para alertas de cambios de turno.
+- categoría y mensaje de los comentarios enviados durante la beta.
 
 ## Finalidades
 
-Los datos se usan para calcular el roster, sincronizar la información que el usuario decide compartir, respaldar sus datos, mostrar el clima elegido y operar las funciones de planificación.
+Los datos se usan para calcular el roster, sincronizar la información que el usuario decide compartir, respaldar sus datos, mostrar el clima elegido, operar las funciones de planificación y responder a comentarios de la beta.
 
 ## Sincronización con compañeros
 
@@ -45,6 +46,7 @@ Las alertas del sistema se activan únicamente después de que el usuario conced
 
 - Firebase procesa autenticación y almacenamiento en la nube.
 - Open-Meteo recibe las coordenadas seleccionadas para responder consultas climáticas.
+- Vercel aloja y distribuye la aplicación web.
 
 Antes de incorporar pagos, analítica o nuevos proveedores, esta política debe actualizarse.
 

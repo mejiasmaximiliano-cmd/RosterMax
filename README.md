@@ -4,12 +4,12 @@ RosterMax ayuda a trabajadores con diagramas rotativos a organizar trabajo, desc
 
 ## Estado
 
-La aplicación está en fase de endurecimiento técnico. Las dos primeras fases incorporan:
+La aplicación está preparada para una beta cerrada. Actualmente incorpora:
 
 - cálculo de roster validado y probado para fechas pasadas y futuras;
 - códigos de sincronización aleatorios sin enumerar usuarios;
 - datos privados separados del roster mínimo que el usuario decide compartir;
-- roles administrativos mediante Firebase Custom Claims;
+- acceso administrativo privado mediante un registro protegido en Firestore, con compatibilidad para Firebase Custom Claims;
 - clima por coordenadas confirmadas, con caché local;
 - PWA con recursos propios disponibles después de la primera carga;
 - Tailwind compilado localmente, sin CDN en producción.
@@ -18,6 +18,9 @@ La aplicación está en fase de endurecimiento técnico. Las dos primeras fases 
 - cálculo automático de los próximos francos compartidos;
 - alertas locales configurables para cambios de turno;
 - metas financieras con aportes libres y proyección mensual.
+- vinculación de una cuenta nueva y acceso separado para quienes ya tienen cuenta;
+- campañas patrocinadas por zona y fecha, administradas desde la aplicación;
+- comentarios privados de los participantes de la beta para el administrador.
 
 ## Desarrollo
 
@@ -38,9 +41,13 @@ npm run build
 
 ## Firebase
 
-La configuración del cliente puede definirse mediante las variables listadas en `.env.example`. Antes de publicar hay que desplegar las reglas y asignar el rol administrativo desde un entorno seguro.
+La configuración del cliente puede definirse mediante las variables listadas en `.env.example`. El dominio canónico de producción es `https://rostermax.vercel.app`. Antes de publicar hay que desplegar las reglas y activar el registro privado de la cuenta administradora.
 
 Consultar [docs/FIREBASE_SETUP.md](docs/FIREBASE_SETUP.md).
+
+## Beta cerrada
+
+La lista operativa para invitar al primer grupo se encuentra en [docs/BETA_LAUNCH.md](docs/BETA_LAUNCH.md).
 
 ## Privacidad
 
