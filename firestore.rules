@@ -1,0 +1,73 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function owns(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function validSharedRoster(data, code) {
+      return data.keys().hasOnly([
+          'ownerUid', 'syncCode', 'name', 'workDays', 'restDays', 'startDate', 'updatedAt'
+        ])
+        && data.ownerUid == request.auth.uid
+        && data.syncCode == code
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 40
+        && data.workDays is int
+        && data.workDays >= 1
+        && data.workDays <= 365
+        && data.restDays is int
+        && data.restDays >= 1
+        && data.restDays <= 365
+        && data.startDate is string
+        && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.updatedAt is timestamp;
+    }
+
+    match /artifacts/{appId} {
+      // Cada usuario solo puede leer y modificar su propio espacio privado.
+      match /users/{userId}/{document=**} {
+        allow read, write: if owns(userId);
+      }
+
+      // Un código compartido permite leer un roster exacto, pero nunca listar
+      // ni enumerar todos los códigos o trabajadores.
+      match /public/data/sync_codes/{code} {
+        allow get: if signedIn();
+        allow list: if false;
+        allow create: if signedIn() && validSharedRoster(request.resource.data, code);
+        allow update: if signedIn()
+          && resource.data.ownerUid == request.auth.uid
+          && validSharedRoster(request.resource.data, code);
+        allow delete: if signedIn()
+          && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      }
+
+      // Todos los usuarios autenticados pueden ver campañas, pero solamente
+      // una identidad con Custom Claim admin puede administrarlas.
+      match /public/data/ads/{adId} {
+        allow read: if signedIn();
+        allow write: if isAdmin();
+      }
+
+      // Bloquea el registro global usado por versiones anteriores.
+      match /public/data/users_registry/{userId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

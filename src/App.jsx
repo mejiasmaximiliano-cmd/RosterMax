@@ -1,75 +1,132 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Calendar, CheckSquare, TrendingUp, User, 
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
   Briefcase, Home, Sun, Moon, Search, FileText,
-  CheckCircle2, Circle, X, DollarSign, Award, Users, 
-  Plane, Thermometer, Zap, Calculator, 
+  CheckCircle2, Circle, X, Award, Users,
+  Plane, Thermometer, Zap, Wind,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
-  CloudOff, ShieldAlert, Globe, Users2, Download, Send, Smartphone, LineChart,
-  Megaphone
+  CloudOff, ShieldAlert, Globe, Download, Send, Smartphone, LineChart,
+  Megaphone, Bell, BellRing, Clock3, Link2
 } from 'lucide-react';
-
-// --- FIREBASE IMPORTS ---
-import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInAnonymously, onAuthStateChanged, 
-  GoogleAuthProvider, signInWithPopup, linkWithPopup
+  signInAnonymously, onAuthStateChanged, getIdTokenResult,
+  GoogleAuthProvider, signInWithPopup, linkWithPopup,
 } from 'firebase/auth';
-import { getFirestore, doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { APP_ID, auth, db } from './lib/firebase';
+import { getNextTransition, getStatusForDate, validateRosterConfig } from './lib/roster';
+import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
+import { fetchCurrentWeather, searchWeatherLocations } from './lib/weather';
+import { findRestCoincidences } from './lib/coincidences';
+import { getTransitionReminder } from './lib/reminders';
+import { getGoalProjection } from './lib/finance';
+import OnboardingModal from './components/OnboardingModal';
 
-// --- 🚀 FIREBASE CONFIGURACIÓN ---
-const firebaseConfig = {
-  apiKey: "AIzaSyC-YDie00IPgmhE4gOda8KiSjHTew595NA",
-  authDomain: "rostermax-60242.firebaseapp.com",
-  projectId: "rostermax-60242",
-  storageBucket: "rostermax-60242.firebasestorage.app",
-  messagingSenderId: "937600149125",
-  appId: "1:937600149125:web:7d610cdb6e22b8118e6bec"
+const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
+
+function getTodayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getInviteCodeFromLocation() {
+  if (typeof window === 'undefined') return '';
+  const code = normalizeSyncCode(new URL(window.location.href).searchParams.get('sync'));
+  return isValidSyncCode(code) ? code : '';
+}
+
+function formatShortDate(dateString) {
+  if (!dateString) return '';
+  return new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+    .format(new Date(`${dateString}T00:00:00Z`));
+}
+
+function formatAmount(value, currency = 'USD') {
+  return new Intl.NumberFormat('es-AR', { maximumFractionDigits: 2, style: 'currency', currency })
+    .format(Number(value) || 0);
+}
+
+const DEFAULT_WEATHER_LOCATION = {
+  name: 'Neuquén',
+  label: 'Ciudad de Neuquén, Provincia del Neuquén, Argentina',
+  latitude: -38.95078,
+  longitude: -68.0592,
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = 'roster-max-production';
+const DEFAULT_PROFILE = {
+  displayName: '',
+  company: '',
+  sector: 'Petróleo & Gas',
+  location: 'Neuquén',
+  transport: 'Vuelo',
+  homeProvince: '',
+  siteProvince: '',
+  weatherLocation: DEFAULT_WEATHER_LOCATION,
+};
+
+function getPublicName(currentUser, profile) {
+  return profile.displayName?.trim() || currentUser.displayName || 'Compañero RosterMax';
+}
+
+function getSyncCodeRef(code) {
+  return doc(db, 'artifacts', APP_ID, 'public', 'data', 'sync_codes', code);
+}
+
+function HeaderTitle({ icon: Icon, title, colorClass, theme }) {
+  const cardClass = theme === 'light'
+    ? 'bg-white border-slate-200 shadow-sm'
+    : 'bg-slate-900/60 border-slate-800 backdrop-blur-xl';
+
+  return (
+    <div className="flex items-center space-x-3">
+      <div className={`p-2.5 rounded-xl border ${cardClass} bg-opacity-50 shadow-sm`}>
+        <Icon className={colorClass} size={22}/>
+      </div>
+      <h2 className={`text-2xl font-black tracking-tight ${theme === 'light' ? 'text-slate-800' : 'text-white'}`}>
+        {title}
+      </h2>
+    </div>
+  );
+}
 
 export default function App() {
   // --- STATES ---
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState('roster'); 
+  const [activeTab, setActiveTab] = useState(() => getInviteCodeFromLocation() ? 'crew' : 'roster');
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState('dark'); 
   const [premiumView, setPremiumView] = useState(false); 
-  const [addMethod, setAddMethod] = useState('manual');
+  const [addMethod, setAddMethod] = useState(() => getInviteCodeFromLocation() ? 'sync' : 'manual');
   
   // States: UX, PWA, Admin & Auth
   const [toast, setToast] = useState('');
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [showAdminVault, setShowAdminVault] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [vaultError, setVaultError] = useState(false);
   const [installPrompt, setInstallPrompt] = useState(null);
   const [authMsg, setAuthMsg] = useState('');
-  
-  // CEO Metrics
-  const [userStats, setUserStats] = useState({ total: 0, linked: 0 });
-  const [demographics, setDemographics] = useState({ home: {}, site: {}, list: [] });
+  const [showOnboarding, setShowOnboarding] = useState(false);
   
   // Data States
   const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0] });
-  const [userProfile, setUserProfile] = useState({ company: '', sector: 'Petróleo & Gas', location: 'Neuquén', transport: 'Vuelo', homeProvince: '', siteProvince: '' });
+  const [userProfile, setUserProfile] = useState(DEFAULT_PROFILE);
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
   const [logs, setLogs] = useState([]); 
   const [friends, setFriends] = useState([]); 
-  const [publicUsers, setPublicUsers] = useState([]); // Base pública de sincronización
+  const [friendLiveData, setFriendLiveData] = useState({});
+  const [syncCode, setSyncCode] = useState('');
+  const [syncState, setSyncState] = useState('loading');
+  const [pendingInviteCode, setPendingInviteCode] = useState(getInviteCodeFromLocation);
+  const [pendingInvite, setPendingInvite] = useState(() => ({ loading: Boolean(getInviteCodeFromLocation()), data: null, error: '' }));
+  const [reminderSettings, setReminderSettings] = useState({ enabled: false, leadDays: 1 });
   const [targetDate, setTargetDate] = useState('');
-  const [calcInvestment, setCalcInvestment] = useState({ amount: 1000, years: 5 });
   const [currentAd, setCurrentAd] = useState(null);
 
   // API States
-  const [weatherData, setWeatherData] = useState({ temp: '--', loading: false });
+  const [weatherData, setWeatherData] = useState({ temp: '--', loading: false, error: '' });
+  const [weatherQuery, setWeatherQuery] = useState('');
+  const [weatherOptions, setWeatherOptions] = useState([]);
+  const [weatherSearching, setWeatherSearching] = useState(false);
   const [marketData, setMarketData] = useState({ 
     SPY: { price: '...', change: '...' }, 
     XLE: { price: '...', change: '...' },
@@ -105,35 +162,29 @@ export default function App() {
     };
   }, []);
 
-  // --- REGISTRO/ACTUALIZACIÓN EN LA BASE PÚBLICA (MÉTRICAS Y SYNC) ---
-  const updatePublicRegistry = async (currentUser, profile, roster) => {
-    if (!currentUser) return;
-    const emailName = currentUser.email ? currentUser.email.split('@')[0] : 'Invitado';
-    const displayName = profile.company ? `${emailName} (${profile.company})` : emailName;
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users_registry', currentUser.uid), {
-      uid: currentUser.uid,
-      lastLogin: new Date().toISOString(),
-      isAnonymous: currentUser.isAnonymous,
-      syncCode: `RM-${currentUser.uid.substring(0, 5).toUpperCase()}`,
-      name: displayName,
-      workDays: roster.workDays,
-      restDays: roster.restDays,
-      startDate: roster.startDate,
-      homeProvince: profile.homeProvince || '',
-      siteProvince: profile.siteProvince || ''
-    }, { merge: true }).catch((err) => console.log("Error de sincronización pública:", err));
-  };
-
   // --- MOTOR DE AUTENTICACIÓN ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
-        setUser(currentUser);
-        setLoading(false);
-        // Registro inicial
-        await updatePublicRegistry(currentUser, userProfile, rosterConfig);
+        try {
+          const token = await getIdTokenResult(currentUser);
+          setIsAdmin(token.claims.admin === true);
+          setUser(currentUser);
+          setAuthMsg('');
+        } catch (error) {
+          console.error('No se pudo validar la sesión.', error);
+          setAuthMsg('No se pudo validar la sesión. Revisa tu conexión.');
+        } finally {
+          setLoading(false);
+        }
       } else {
-        try { await signInAnonymously(auth); } catch (err) { console.error(err); }
+        try {
+          await signInAnonymously(auth);
+        } catch (error) {
+          console.error('No se pudo iniciar la sesión invitada.', error);
+          setAuthMsg('No pudimos iniciar tu sesión. Reintenta con conexión.');
+          setLoading(false);
+        }
       }
     });
     return () => unsubscribe();
@@ -142,37 +193,103 @@ export default function App() {
   // VERIFICACIÓN PERMANENTE
   const isPermanentlyLinked = user && !user.isAnonymous && user.email;
 
-  // --- BASE DE DATOS (SYNC EN TIEMPO REAL) ---
+  // --- CÓDIGO PRIVADO DE SINCRONIZACIÓN ---
   useEffect(() => {
     if (!user) return;
-    
-    // 1. Escuchar la Base Pública de Usuarios Registrados (Para Sincronización)
-    const unsubPublicUsers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'), (s) => {
-      setPublicUsers(s.docs.map(d => d.data()));
-    }, (err) => console.log("Permiso de lectura pública activo."));
+    let cancelled = false;
 
-    // 2. Escuchar datos privados de configuración y perfil
-    const unsubRoster = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), (d) => { if (d.exists()) setRosterConfig(d.data()); });
-    const unsubProfile = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), (d) => { if (d.exists()) setUserProfile(d.data()); });
-    const unsubTheme = onSnapshot(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'theme'), (d) => { if (d.exists()) setTheme(d.data().mode); });
+    const ensureSyncCode = async () => {
+      setSyncState('loading');
+      try {
+        const settingsRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'sync');
+        const settingsSnapshot = await getDoc(settingsRef);
+        let code = settingsSnapshot.exists() ? settingsSnapshot.data().code : '';
+
+        if (!isValidSyncCode(code)) {
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            const candidate = createSyncCode();
+            const existing = await getDoc(getSyncCodeRef(candidate));
+            if (!existing.exists()) {
+              code = candidate;
+              break;
+            }
+          }
+          if (!code) throw new Error('No se pudo generar un código único.');
+          await setDoc(settingsRef, { code, createdAt: serverTimestamp() }, { merge: true });
+        }
+
+        if (!cancelled) {
+          setSyncCode(code);
+          setSyncState('ready');
+        }
+      } catch (error) {
+        console.error('No se pudo preparar la sincronización.', error);
+        if (!cancelled) setSyncState('error');
+      }
+    };
+
+    ensureSyncCode();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Publica únicamente el calendario compartible, sin provincia, correo ni métricas.
+  useEffect(() => {
+    if (!user || !syncCode) return;
+    setDoc(getSyncCodeRef(syncCode), {
+      ownerUid: user.uid,
+      syncCode,
+      name: getPublicName(user, userProfile),
+      workDays: rosterConfig.workDays,
+      restDays: rosterConfig.restDays,
+      startDate: rosterConfig.startDate,
+      updatedAt: serverTimestamp(),
+    }, { merge: true }).catch((error) => {
+      console.error('No se pudo publicar el roster compartible.', error);
+      setSyncState('error');
+    });
+  }, [user, syncCode, userProfile, rosterConfig.workDays, rosterConfig.restDays, rosterConfig.startDate]);
+
+  // --- BASE DE DATOS PRIVADA EN TIEMPO REAL ---
+  useEffect(() => {
+    if (!user) return;
+    const logRealtimeError = (source) => (error) => console.error(`Error de lectura en ${source}.`, error);
+
+    const unsubRoster = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), (snapshot) => {
+      if (snapshot.exists()) setRosterConfig(snapshot.data());
+    }, logRealtimeError('roster'));
+    const unsubProfile = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setUserProfile({ ...DEFAULT_PROFILE, ...data, weatherLocation: data.weatherLocation || DEFAULT_WEATHER_LOCATION });
+      }
+    }, logRealtimeError('perfil'));
+    const unsubTheme = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), (snapshot) => {
+      if (snapshot.exists()) setTheme(snapshot.data().mode);
+    }, logRealtimeError('tema'));
+    const unsubReminders = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), (snapshot) => {
+      if (snapshot.exists()) setReminderSettings({ enabled: false, leadDays: 1, ...snapshot.data() });
+    }, logRealtimeError('recordatorios'));
+    const unsubOnboarding = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), (snapshot) => {
+      const completed = snapshot.exists() && snapshot.data().completed === true;
+      if (!completed && localStorage.getItem(ONBOARDING_DISMISS_KEY) !== '1') setShowOnboarding(true);
+    }, logRealtimeError('guía inicial'));
     
-    // 3. Listas y bitácoras
-    const unsubTasks = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubGoals = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'goals'), (s) => setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubLogs = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))));
-    const unsubFriends = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubTasks = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('tareas'));
+    const unsubGoals = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), (s) => setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('metas'));
+    const unsubLogs = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('bitácora'));
+    const unsubFriends = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('compañeros'));
     
-    // 4. Escuchar Anuncios
-    const unsubAds = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'), (d) => { 
+    const unsubAds = onSnapshot(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'), (d) => {
       if (d.exists() && d.data().active) setCurrentAd(d.data()); 
       else setCurrentAd(null);
-    }, (err) => console.log("Esperando anuncios activos..."));
+    }, logRealtimeError('anuncios'));
 
     return () => { 
-      unsubPublicUsers();
       unsubRoster(); 
       unsubProfile(); 
       unsubTheme(); 
+      unsubReminders();
+      unsubOnboarding();
       unsubTasks(); 
       unsubGoals(); 
       unsubLogs(); 
@@ -181,80 +298,125 @@ export default function App() {
     };
   }, [user]);
 
-  // --- COMBINACIÓN DE DIAGRAMAS REALTIME (P2P SYNC) ---
+  // Solo escucha los códigos que el usuario agregó explícitamente.
+  useEffect(() => {
+    const syncedFriends = friends.filter((friend) => friend.isSynced && isValidSyncCode(friend.syncCode));
+    if (syncedFriends.length === 0) {
+      return undefined;
+    }
+
+    const unsubscribers = syncedFriends.map((friend) => onSnapshot(
+      getSyncCodeRef(friend.syncCode),
+      (snapshot) => {
+        setFriendLiveData((current) => ({
+          ...current,
+          [friend.syncCode]: snapshot.exists() ? snapshot.data() : null,
+        }));
+      },
+      (error) => {
+        console.error(`No se pudo sincronizar ${friend.syncCode}.`, error);
+        setFriendLiveData((current) => ({ ...current, [friend.syncCode]: null }));
+      },
+    ));
+
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [friends]);
+
+  // Un enlace de invitación nunca vincula automáticamente: muestra primero
+  // quién comparte su roster y espera confirmación explícita.
+  useEffect(() => {
+    if (!user || !pendingInviteCode) return;
+    let cancelled = false;
+
+    getDoc(getSyncCodeRef(pendingInviteCode))
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (!snapshot.exists()) {
+          setPendingInvite({ loading: false, data: null, error: 'La invitación no existe o venció.' });
+          return;
+        }
+        setPendingInvite({ loading: false, data: snapshot.data(), error: '' });
+      })
+      .catch((error) => {
+        console.error('No se pudo abrir la invitación.', error);
+        if (!cancelled) setPendingInvite({ loading: false, data: null, error: 'No pudimos comprobar la invitación.' });
+      });
+
+    return () => { cancelled = true; };
+  }, [user, pendingInviteCode]);
+
+  // --- COMBINACIÓN DE DIAGRAMAS EN TIEMPO REAL ---
   const displayFriends = useMemo(() => {
-    return friends.map(f => {
-      if (f.isSynced) {
-        // Buscamos si el compañero actualizó su diagrama en la base pública
-        const liveData = publicUsers.find(u => u.syncCode === f.syncCode || u.uid === f.friendUid);
+    return friends.map((friend) => {
+      if (friend.isSynced) {
+        const liveData = friendLiveData[friend.syncCode];
         if (liveData) {
           return {
-            ...f,
-            name: liveData.name || f.name,
+            ...friend,
+            name: liveData.name || friend.name,
             workDays: liveData.workDays,
             restDays: liveData.restDays,
-            startDate: liveData.startDate
+            startDate: liveData.startDate,
+            syncAvailable: true,
           };
         }
+        return { ...friend, syncAvailable: false };
       }
-      return f;
+      return friend;
     });
-  }, [friends, publicUsers]);
-
-  // --- PANEL CEO AVANZADO ---
-  useEffect(() => {
-    if (!isAdmin) return;
-    const fetchCEOData = async () => {
-      try {
-        const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'users_registry'));
-        let linkedCount = 0;
-        let homeStats = {};
-        let siteStats = {};
-        let list = [];
-        
-        snap.docs.forEach(d => {
-          const data = d.data();
-          if (data.isAnonymous === false) linkedCount++;
-          if (data.homeProvince) homeStats[data.homeProvince] = (homeStats[data.homeProvince] || 0) + 1;
-          if (data.siteProvince) siteStats[data.siteProvince] = (siteStats[data.siteProvince] || 0) + 1;
-          
-          list.push({
-            uid: d.id,
-            name: data.name || "Invitado",
-            isAnonymous: data.isAnonymous !== false,
-            homeProvince: data.homeProvince || 'No configurada',
-            siteProvince: data.siteProvince || 'No configurada',
-            lastLogin: data.lastLogin ? new Date(data.lastLogin).toLocaleDateString() : 'Desconocido'
-          });
-        });
-        
-        setUserStats({ total: snap.size, linked: linkedCount });
-        setDemographics({ home: homeStats, site: siteStats, list });
-      } catch (e) { console.log("Error cargando panel CEO", e); }
-    };
-    fetchCEOData();
-  }, [isAdmin, publicUsers]);
+  }, [friends, friendLiveData]);
 
   // --- CLIMA REAL ---
   useEffect(() => {
-    const fetchWeather = async () => {
-      if (!userProfile.location) return;
-      setWeatherData({ temp: '--', loading: true });
+    let cancelled = false;
+    const loadWeather = async () => {
+      const location = userProfile.weatherLocation;
+      if (!location?.latitude || !location?.longitude) {
+        setWeatherData({ temp: '--', loading: false, error: 'Configura el clima' });
+        return;
+      }
+      setWeatherData((current) => ({ ...current, loading: true, error: '' }));
       try {
-        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(userProfile.location)}&count=1&language=es`);
-        const geoData = await geoRes.json();
-        if (geoData.results && geoData.results.length > 0) {
-          const { latitude, longitude } = geoData.results[0];
-          const wxRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
-          const wxData = await wxRes.json();
-          setWeatherData({ temp: Math.round(wxData.current_weather.temperature), loading: false });
-        } else {
-          setWeatherData({ temp: '--', loading: false });
-        }
-      } catch (error) { setWeatherData({ temp: '--', loading: false }); }
+        const weather = await fetchCurrentWeather(location.latitude, location.longitude);
+        if (!cancelled) setWeatherData({ ...weather, loading: false, error: '' });
+      } catch (error) {
+        if (!cancelled) setWeatherData({ temp: '--', loading: false, error: error.message });
+      }
     };
-    fetchWeather();
-  }, [userProfile.location]);
+    loadWeather();
+    return () => { cancelled = true; };
+  }, [userProfile.weatherLocation]);
+
+  // Las alertas web locales se muestran cuando el usuario abre la app dentro
+  // de la ventana elegida. Las notificaciones con la app cerrada requerirán Push.
+  useEffect(() => {
+    if (!reminderSettings.enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const reminder = getTransitionReminder(getTodayDate(), rosterConfig, reminderSettings.leadDays);
+    if (!reminder) return;
+
+    const notificationKey = `rostermax:notified:${reminder.id}`;
+    if (localStorage.getItem(notificationKey) === '1') return;
+
+    const notify = async () => {
+      try {
+        if ('serviceWorker' in navigator) {
+          const registration = await navigator.serviceWorker.ready;
+          await registration.showNotification(reminder.title, {
+            body: reminder.body,
+            icon: '/logo.svg',
+            badge: '/favicon.svg',
+            tag: reminder.id,
+          });
+        } else {
+          new Notification(reminder.title, { body: reminder.body, icon: '/logo.svg', tag: reminder.id });
+        }
+        localStorage.setItem(notificationKey, '1');
+      } catch (error) {
+        console.error('No se pudo mostrar el recordatorio.', error);
+      }
+    };
+    notify();
+  }, [reminderSettings, rosterConfig]);
 
   // --- FINANZAS MERVAL & USA ---
   useEffect(() => {
@@ -273,7 +435,7 @@ export default function App() {
           
           const changePercent = (((price - prevClose) / prevClose) * 100).toFixed(2);
           return { price: price.toFixed(2), change: changePercent > 0 ? `+${changePercent}%` : `${changePercent}%`, isUp: changePercent >= 0 };
-        } catch (error) {
+        } catch {
           return { price: 'N/A', change: '--', isUp: true }; 
         }
       };
@@ -288,25 +450,15 @@ export default function App() {
     fetchMarkets();
   }, [activeTab, premiumView]);
 
-  // --- CÁLCULO DE DIAGRAMAS ---
-  const getStatusForDate = (dateStr, config) => {
-    if (!dateStr || !config.startDate) return null;
-    const start = new Date(config.startDate);
-    const target = new Date(dateStr);
-    start.setUTCHours(0,0,0,0); target.setUTCHours(0,0,0,0);
-    const diffTime = target.getTime() - start.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) return { error: "Fecha pasada" };
-    const cycleLength = config.workDays + config.restDays;
-    const dayInCycle = diffDays % cycleLength;
-    const isWorking = dayInCycle < config.workDays;
-    const actualDay = isWorking ? dayInCycle + 1 : (dayInCycle - config.workDays) + 1;
-    const daysLeftInPhase = isWorking ? config.workDays - dayInCycle : cycleLength - dayInCycle;
-    return { isWorking, actualDay, totalPhaseDays: isWorking ? config.workDays : config.restDays, daysLeftInPhase };
-  };
-
-  const currentStatus = useMemo(() => getStatusForDate(new Date().toISOString().split('T')[0], rosterConfig), [rosterConfig]);
+  const currentStatus = useMemo(() => getStatusForDate(getTodayDate(), rosterConfig), [rosterConfig]);
+  const nextTransition = useMemo(() => getNextTransition(getTodayDate(), rosterConfig), [rosterConfig]);
   const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
+  const upcomingCoincidences = useMemo(() => findRestCoincidences(
+    getTodayDate(),
+    rosterConfig,
+    displayFriends.filter((friend) => friend.syncAvailable !== false),
+    { horizonDays: 120, maxResults: 6 },
+  ), [rosterConfig, displayFriends]);
 
   // --- HANDLERS ACCIONES PWA ---
   const handleInstallClick = async () => {
@@ -321,7 +473,6 @@ export default function App() {
       const provider = new GoogleAuthProvider();
       if (user && user.isAnonymous) {
         await linkWithPopup(user, provider);
-        await updatePublicRegistry(auth.currentUser, userProfile, rosterConfig);
         showToast("¡Cuenta blindada exitosamente!");
       } else {
         await signInWithPopup(auth, provider);
@@ -337,100 +488,302 @@ export default function App() {
   };
 
   const shareMyCode = async () => {
-    const myCode = `RM-${user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}`;
-    const shareData = { title: 'Mi Código RosterMax', text: `¡Agrégame a tu equipo en RosterMax usando mi código: ${myCode}` };
-    if (navigator.share) { try { await navigator.share(shareData); } catch (err) {} } 
-    else { showToast(`Tu código es: ${myCode} (Copiado)`); }
+    if (!syncCode) {
+      showToast('Tu código todavía se está preparando.');
+      return;
+    }
+    const inviteUrl = new URL(window.location.href);
+    inviteUrl.search = '';
+    inviteUrl.hash = '';
+    inviteUrl.searchParams.set('sync', syncCode);
+    const shareData = {
+      title: 'Mi roster en RosterMax',
+      text: `¡Comparemos nuestros francos! Mi código es ${syncCode}.`,
+      url: inviteUrl.toString(),
+    };
+    if (navigator.share) {
+      try { await navigator.share(shareData); } catch { /* El usuario canceló el diálogo. */ }
+    } else {
+      await navigator.clipboard?.writeText(inviteUrl.toString());
+      showToast(`Enlace de invitación copiado.`);
+    }
   };
 
   const shareApp = async () => {
     const shareData = { title: 'RosterMax', text: '¡Instala RosterMax! La app para gestionar nuestro diagrama.', url: window.location.origin };
-    if (navigator.share) { try { await navigator.share(shareData); } catch (err) {} } 
+    if (navigator.share) { try { await navigator.share(shareData); } catch { /* El usuario canceló el diálogo. */ } }
     else { showToast("Comparte tu enlace web."); }
   };
 
   // --- SUBMIT FORMULARIOS ---
-  const updateRoster = async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const rosterData = {
-      workDays: parseInt(fd.get('workDays')), restDays: parseInt(fd.get('restDays')), startDate: fd.get('startDate')
-    };
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'roster'), rosterData);
-    await updatePublicRegistry(user, userProfile, rosterData);
-    showToast("Diagrama actualizado.");
+  const saveRoster = async (rosterData) => {
+    const validation = validateRosterConfig(rosterData);
+    if (!validation.valid) {
+      showToast(validation.error);
+      return false;
+    }
+    try {
+      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), rosterData);
+      showToast("Diagrama actualizado.");
+      return true;
+    } catch (error) {
+      console.error('No se pudo actualizar el diagrama.', error);
+      showToast('No se pudo guardar el diagrama.');
+      return false;
+    }
   };
 
-  const updateProfile = async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const profileData = {
-      company: fd.get('company'), sector: fd.get('sector'), location: fd.get('location'), transport: fd.get('transport'),
-      homeProvince: fd.get('homeProvince'), siteProvince: fd.get('siteProvince')
-    };
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile'), profileData);
-    await updatePublicRegistry(user, profileData, rosterConfig);
-    showToast("Perfil guardado.");
+  const updateRoster = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await saveRoster({
+      workDays: Number(form.get('workDays')),
+      restDays: Number(form.get('restDays')),
+      startDate: form.get('startDate'),
+    });
+  };
+
+  const saveProfile = async (profileData) => {
+    try {
+      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), {
+        ...DEFAULT_PROFILE,
+        ...profileData,
+        displayName: String(profileData.displayName || '').trim().slice(0, 40),
+        weatherLocation: profileData.weatherLocation || userProfile.weatherLocation || DEFAULT_WEATHER_LOCATION,
+      });
+      showToast("Perfil guardado.");
+      return true;
+    } catch (error) {
+      console.error('No se pudo guardar el perfil.', error);
+      showToast('No se pudo guardar el perfil.');
+      return false;
+    }
+  };
+
+  const updateProfile = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    await saveProfile({
+      displayName: form.get('displayName'),
+      company: form.get('company'),
+      sector: form.get('sector'),
+      location: form.get('location'),
+      transport: form.get('transport'),
+      homeProvince: form.get('homeProvince'),
+      siteProvince: form.get('siteProvince'),
+      weatherLocation: userProfile.weatherLocation || DEFAULT_WEATHER_LOCATION,
+    });
+  };
+
+  const completeOnboarding = async (destination = 'roster') => {
+    try {
+      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), {
+        completed: true,
+        version: 2,
+        completedAt: serverTimestamp(),
+      });
+      localStorage.removeItem(ONBOARDING_DISMISS_KEY);
+      setShowOnboarding(false);
+      setActiveTab(destination);
+      showToast('RosterMax está listo para usar.');
+    } catch (error) {
+      console.error('No se pudo completar la guía.', error);
+      showToast('No se pudo guardar el avance de la guía.');
+    }
+  };
+
+  const skipOnboarding = () => {
+    localStorage.setItem(ONBOARDING_DISMISS_KEY, '1');
+    setShowOnboarding(false);
+  };
+
+  const reopenOnboarding = () => {
+    localStorage.removeItem(ONBOARDING_DISMISS_KEY);
+    setShowOnboarding(true);
+  };
+
+  const handleWeatherSearch = async () => {
+    if (weatherQuery.trim().length < 2) {
+      showToast('Escribe una ciudad o localidad cercana.');
+      return;
+    }
+    setWeatherSearching(true);
+    try {
+      const options = await searchWeatherLocations(weatherQuery);
+      setWeatherOptions(options);
+      if (options.length === 0) showToast('No encontramos esa localidad en Argentina.');
+    } catch (error) {
+      console.error('Falló la búsqueda climática.', error);
+      showToast('No pudimos buscar la ubicación climática.');
+    } finally {
+      setWeatherSearching(false);
+    }
+  };
+
+  const selectWeatherLocation = (location) => {
+    setUserProfile((profile) => ({ ...profile, weatherLocation: location }));
+    setWeatherOptions([]);
+    setWeatherQuery('');
+    showToast(`Clima configurado para ${location.name}. Guarda el perfil.`);
+  };
+
+  const clearPendingInvite = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('sync');
+    window.history.replaceState({}, '', url);
+    setPendingInviteCode('');
+    setPendingInvite({ loading: false, data: null, error: '' });
   };
 
   // --- MULTIJUGADOR: PROCESO REAL DE VINCULACIÓN ---
-  const handleSyncAdd = async (e) => {
-    e.preventDefault();
-    const codeInput = e.target.elements.syncCode.value.trim().toUpperCase();
-    if (!codeInput) return;
-
-    // Buscamos al compañero en el registro de usuarios en memoria (Regla 2: No Complex Queries)
-    const foundUser = publicUsers.find(u => u.syncCode === codeInput);
-    
-    if (!foundUser) {
-      showToast("Código inválido o usuario inexistente.");
-      return;
-    }
-
-    if (foundUser.uid === user.uid) {
-      showToast("No puedes sincronizarte contigo mismo.");
-      return;
-    }
-
-    // Verificar si ya fue agregado
-    const alreadyExists = friends.some(f => f.friendUid === foundUser.uid);
-    if (alreadyExists) {
-      showToast("Este compañero ya está en tu lista.");
-      return;
+  const linkSyncCode = async (rawCode) => {
+    const codeInput = normalizeSyncCode(rawCode);
+    if (!isValidSyncCode(codeInput)) {
+      showToast("El código debe tener el formato RM-XXXXXXXX.");
+      return false;
     }
 
     try {
-      // Guardar relación en el perfil del usuario activo
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'friends'), {
+      const snapshot = await getDoc(getSyncCodeRef(codeInput));
+      if (!snapshot.exists()) {
+        showToast("Código inexistente o vencido.");
+        return false;
+      }
+      const foundUser = snapshot.data();
+      if (foundUser.ownerUid === user.uid) {
+        showToast("No puedes sincronizarte contigo mismo.");
+        return false;
+      }
+      if (friends.some((friend) => friend.friendUid === foundUser.ownerUid || friend.syncCode === codeInput)) {
+        showToast("Este compañero ya está en tu lista.");
+        return false;
+      }
+
+      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), {
         name: foundUser.name || "Compañero Sincronizado",
-        friendUid: foundUser.uid,
-        syncCode: foundUser.syncCode,
+        friendUid: foundUser.ownerUid,
+        syncCode: codeInput,
         isSynced: true,
-        createdAt: new Date().toISOString()
+        createdAt: serverTimestamp(),
       });
       showToast(`¡Sincronizado con ${foundUser.name}!`);
-      e.target.reset();
-    } catch (err) {
+      return true;
+    } catch (error) {
+      console.error('No se pudo guardar la vinculación.', error);
       showToast("Error al guardar vinculación.");
+      return false;
     }
+  };
+
+  const handleSyncAdd = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const linked = await linkSyncCode(formElement.elements.syncCode.value);
+    if (linked) formElement.reset();
+  };
+
+  const acceptPendingInvite = async () => {
+    const linked = await linkSyncCode(pendingInviteCode);
+    if (linked) clearPendingInvite();
+  };
+
+  const requestTurnReminders = async () => {
+    if (typeof Notification === 'undefined') {
+      showToast('Este navegador no admite alertas del sistema.');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      showToast('Necesitamos permiso para mostrar alertas.');
+      return;
+    }
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), {
+      enabled: true,
+      leadDays: reminderSettings.leadDays || 1,
+      updatedAt: serverTimestamp(),
+    });
+    showToast('Alertas de cambio de turno activadas.');
+  };
+
+  const disableTurnReminders = async () => {
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), {
+      enabled: false,
+      leadDays: reminderSettings.leadDays || 1,
+      updatedAt: serverTimestamp(),
+    });
+    showToast('Alertas desactivadas.');
+  };
+
+  const updateReminderLeadDays = async (leadDays) => {
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), {
+      ...reminderSettings,
+      leadDays: Number(leadDays),
+      updatedAt: serverTimestamp(),
+    });
   };
 
   const toggleTheme = async (newTheme) => {
     setTheme(newTheme);
-    if(user) await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'theme'), { mode: newTheme });
+    if(user) await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), { mode: newTheme });
   };
 
   const addGenericDoc = async (e, collectionName, fields) => {
     e.preventDefault();
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { ...fields, createdAt: new Date().toISOString() });
+    await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() });
     e.target.reset();
   };
 
-  const toggleLog = async (log) => await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'logs', log.id), { ...log, resolved: !log.resolved });
-  const toggleTask = async (task) => await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id), { ...task, completed: !task.completed });
+  const toggleLog = async (log) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { ...log, resolved: !log.resolved });
+  const toggleTask = async (task) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), { ...task, completed: !task.completed });
+  const createFinancialGoal = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const target = Number(form.get('target'));
+    const monthlyPlan = Number(form.get('monthlyPlan'));
+    if (!Number.isFinite(target) || target <= 0 || !Number.isFinite(monthlyPlan) || monthlyPlan < 0) {
+      showToast('Revisa los montos de la meta.');
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), {
+        title: String(form.get('title')).trim().slice(0, 80),
+        target,
+        monthlyPlan,
+        current: 0,
+        currency: form.get('currency'),
+        createdAt: serverTimestamp(),
+      });
+      formElement.reset();
+      showToast('Meta financiera creada.');
+    } catch (error) {
+      console.error('No se pudo crear la meta.', error);
+      showToast('No se pudo crear la meta.');
+    }
+  };
+
   const addFunds = async (goal, amount) => {
-    const newAmount = (goal.current || 0) + amount;
-    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'goals', goal.id), { ...goal, current: newAmount > goal.target ? goal.target : newAmount });
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) {
+      showToast('Ingresa un aporte mayor que cero.');
+      return false;
+    }
+    const goalRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'goals', goal.id);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(goalRef);
+        if (!snapshot.exists()) throw new Error('La meta ya no existe.');
+        const data = snapshot.data();
+        const nextAmount = Math.min(Number(data.target), Number(data.current || 0) + value);
+        transaction.set(goalRef, { current: nextAmount, updatedAt: serverTimestamp() }, { merge: true });
+      });
+      showToast(`Aporte de ${formatAmount(value, goal.currency)} registrado.`);
+      return true;
+    } catch (error) {
+      console.error('No se pudo registrar el aporte.', error);
+      showToast('No se pudo registrar el aporte.');
+      return false;
+    }
   };
 
   // --- SMART AD ENGINE (CEO) ---
@@ -438,36 +791,29 @@ export default function App() {
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'), {
+      await setDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'), {
         company: fd.get('adCompany'),
         title: fd.get('adTitle'),
         location: fd.get('adLocation').toLowerCase(),
         active: true,
-        updatedAt: new Date().toISOString()
+        updatedAt: serverTimestamp(),
       });
       showToast("¡Anuncio publicado al aire!");
       e.target.reset();
-    } catch (err) { showToast("Error en permisos públicos de anuncios."); }
+    } catch (error) {
+      console.error('No se pudo publicar el anuncio.', error);
+      showToast("Error en permisos públicos de anuncios.");
+    }
   };
 
   const deleteAd = async () => {
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ads', 'campaign'));
+      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'ads', 'campaign'));
       showToast("Anuncio removido.");
-    } catch (err) { showToast("Error al remover anuncio."); }
-  };
-
-  // --- BÓVEDA CEO ---
-  const [clickCount, setClickCount] = useState(0);
-  const handleLogoClick = () => {
-    setClickCount(prev => prev + 1);
-    if (clickCount + 1 >= 3) { setShowAdminVault(true); setClickCount(0); }
-    setTimeout(() => setClickCount(0), 2000); 
-  };
-  const handleVaultSubmit = (e) => {
-    e.preventDefault();
-    if (adminPassword === 'admin123') { setIsAdmin(true); setShowAdminVault(false); setActiveTab('admin'); setAdminPassword(''); setVaultError(false); } 
-    else { setVaultError(true); }
+    } catch (error) {
+      console.error('No se pudo remover el anuncio.', error);
+      showToast("Error al remover anuncio.");
+    }
   };
 
   // --- ESTILOS DE INTERFAZ ---
@@ -485,19 +831,23 @@ export default function App() {
     return <BriefcaseBusiness size={24} className="mb-2"/>; 
   };
 
-  const HeaderTitle = ({ icon: Icon, title, colorClass }) => (
-    <div className="flex items-center space-x-3">
-      <div className={`p-2.5 rounded-xl border ${cardClasses[theme]} bg-opacity-50 shadow-sm`}><Icon className={colorClass} size={22}/></div>
-      <h2 className={`text-2xl font-black tracking-tight ${theme === 'light' ? 'text-slate-800' : 'text-white'}`}>{title}</h2>
-    </div>
-  );
-
   const shouldShowAd = currentAd && (currentAd.location === 'todos' || currentAd.location.includes(userProfile.location?.toLowerCase()));
 
   if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>;
 
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
+      {showOnboarding && user && (
+        <OnboardingModal
+          theme={theme}
+          rosterConfig={rosterConfig}
+          userProfile={userProfile}
+          onSaveRoster={saveRoster}
+          onSaveProfile={saveProfile}
+          onComplete={completeOnboarding}
+          onSkip={skipOnboarding}
+        />
+      )}
       
       {/* NOTIFICACIONES TOAST */}
       {toast && (
@@ -512,24 +862,11 @@ export default function App() {
         </div>
       )}
 
-      {showAdminVault && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl w-full max-w-sm animate-in zoom-in-95 shadow-2xl text-white">
-            <div className="flex justify-between items-center mb-4"><h3 className="font-black text-amber-500 flex items-center"><ShieldAlert className="mr-2"/> Autenticación CEO</h3><button onClick={() => setShowAdminVault(false)} className="text-slate-500 hover:text-white"><X size={20}/></button></div>
-            <form onSubmit={handleVaultSubmit}>
-              <input type="password" autoFocus placeholder="Clave de acceso" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className={`w-full rounded-xl px-4 py-3 mb-2 outline-none border bg-slate-950 text-white ${vaultError ? 'border-red-500' : 'border-slate-700'}`} />
-              <button type="submit" className="w-full mt-2 bg-amber-500 text-slate-900 font-bold py-3 rounded-xl hover:bg-amber-400">Entrar a Bóveda</button>
-            </form>
-          </div>
-        </div>
-      )}
-
       <header className={`sticky top-0 z-40 px-4 py-4 border-b backdrop-blur-md ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/80 border-slate-800'}`}>
         <div className="max-w-md mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-2 cursor-pointer select-none" onClick={handleLogoClick}>
+          <div className="flex items-center space-x-2 select-none">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 relative">
               <span className="font-bold text-white">R</span>
-              {clickCount > 0 && <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-amber-500 rounded-full animate-ping"></span>}
             </div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-500 to-teal-400 bg-clip-text text-transparent">RosterMax</h1>
           </div>
@@ -566,6 +903,21 @@ export default function App() {
               </div>
             </div>
 
+            {!nextTransition?.error && (
+              <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
+                <div className="flex items-center min-w-0">
+                  <div className={`h-10 w-10 rounded-xl flex items-center justify-center mr-3 flex-shrink-0 ${nextTransition.nextStatus === 'rest' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
+                    <Clock3 size={20}/>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold">Próxima {nextTransition.nextStatus === 'rest' ? 'bajada' : 'subida'}</p>
+                    <p className={`text-xs ${textMuted}`}>{formatShortDate(nextTransition.date)} · en {nextTransition.daysUntil} {nextTransition.daysUntil === 1 ? 'día' : 'días'}</p>
+                  </div>
+                </div>
+                {reminderSettings.enabled ? <BellRing size={18} className="text-emerald-500" aria-label="Alertas activadas"/> : <Bell size={18} className={textMuted} aria-label="Alertas desactivadas"/>}
+              </div>
+            )}
+
             {/* MOTOR DE ANUNCIOS SMART */}
             {shouldShowAd && (
               <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 cursor-pointer overflow-hidden relative animate-in fade-in slide-in-from-top-4">
@@ -583,8 +935,16 @@ export default function App() {
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
                  <Thermometer size={24} className={`${theme === 'light' ? 'text-amber-500' : 'text-amber-500'} mb-2`}/>
                  <span className="text-2xl font-bold">{weatherData.loading ? '...' : `${weatherData.temp}°C`}</span>
-                 <span className={`text-xs font-bold mt-1 max-w-full truncate px-2`} title={userProfile.location || 'Sin Ubicación'}>{userProfile.location || 'Ubicación...'}</span>
-                 <span className={`text-[9px] ${textMuted}`}>Clima Real</span>
+                 <span className="text-xs font-bold mt-1 max-w-full truncate px-2" title={userProfile.weatherLocation?.label}>
+                   {userProfile.weatherLocation?.name || 'Sin ubicación'}
+                 </span>
+                 {weatherData.error ? (
+                   <span className="text-[9px] text-red-400 truncate max-w-full" title={weatherData.error}>{weatherData.error}</span>
+                 ) : (
+                   <span className={`text-[9px] ${textMuted} flex items-center gap-1`}>
+                     <Wind size={9}/> {weatherData.windSpeed ?? '--'} km/h{weatherData.stale ? ' · guardado' : ''}
+                   </span>
+                 )}
                </div>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center text-indigo-400`}>
                  {getTransportIcon(userProfile.transport)}
@@ -606,7 +966,7 @@ export default function App() {
                   <div key={log.id} className={`p-3 rounded-lg border text-sm flex items-start group transition-all duration-300 ${log.resolved ? 'opacity-50' : ''} ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                     <button onClick={() => toggleLog(log)} className="mr-3 mt-0.5 flex-shrink-0 transition-transform active:scale-90">{log.resolved ? <CheckCircle2 size={18} className="text-emerald-500" /> : <Circle size={18} className={textMuted} />}</button>
                     <span className={`flex-1 transition-all ${log.resolved ? 'line-through opacity-50' : ''}`}>{log.content}</span>
-                    <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'logs', log.id))} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity ml-2"><X size={16}/></button>
+                    <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id))} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity ml-2"><X size={16}/></button>
                   </div>
                 ))}
               </div>
@@ -618,8 +978,28 @@ export default function App() {
         {activeTab === 'crew' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
-               <HeaderTitle icon={Users} title="Proyector de Equipo" colorClass="text-blue-500" />
+               <HeaderTitle icon={Users} title="Proyector de Equipo" colorClass="text-blue-500" theme={theme} />
             </div>
+
+            {pendingInviteCode && (
+              <div className={`rounded-2xl border p-5 ${theme === 'light' ? 'bg-blue-50 border-blue-200' : 'bg-blue-500/10 border-blue-500/30'}`}>
+                <div className="flex items-start gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-blue-500 text-white flex items-center justify-center flex-shrink-0"><Link2 size={20}/></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black uppercase tracking-wider text-blue-500">Invitación recibida</p>
+                    {pendingInvite.loading && <p className={`text-sm mt-1 ${textMuted}`}>Comprobando el enlace…</p>}
+                    {pendingInvite.error && <p className="text-sm mt-1 text-red-400">{pendingInvite.error}</p>}
+                    {pendingInvite.data && (
+                      <><p className="font-black text-lg mt-1 truncate">{pendingInvite.data.name}</p><p className={`text-xs ${textMuted}`}>Comparte un roster {pendingInvite.data.workDays}x{pendingInvite.data.restDays}. Tú decides si añadirlo.</p></>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3 mt-4">
+                  <button type="button" onClick={clearPendingInvite} className={`py-2.5 rounded-xl border text-xs font-bold ${inputBg}`}>Descartar</button>
+                  <button type="button" onClick={acceptPendingInvite} disabled={!pendingInvite.data || pendingInvite.loading} className="py-2.5 rounded-xl bg-blue-500 text-white text-xs font-bold disabled:opacity-50">Añadir compañero</button>
+                </div>
+              </div>
+            )}
             
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-blue-500 relative overflow-hidden`}>
               <div className="absolute -right-4 -top-4 opacity-10"><Search size={80} className="text-blue-500"/></div>
@@ -637,7 +1017,14 @@ export default function App() {
                   )}
                   {displayFriends.map(friend => {
                     const status = getStatusForDate(targetDate, friend);
-                    if (!status) return null;
+                    if (!status || status.error) {
+                      return (
+                        <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
+                          <span className="font-semibold text-sm">{friend.name}</span>
+                          <span className="text-xs text-amber-500">Sin datos sincronizados</span>
+                        </div>
+                      );
+                    }
                     const isCoincidence = !targetStatus?.isWorking && !status.isWorking;
                     return (
                       <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center transition-all ${status.isWorking ? (theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800/40 border-slate-700') : (isCoincidence ? (theme==='light'?'bg-emerald-100 border-emerald-300 shadow-md':'bg-emerald-500/20 border-emerald-500 shadow-md shadow-emerald-500/10') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30'))}`}>
@@ -650,9 +1037,32 @@ export default function App() {
               )}
             </div>
 
-            <button onClick={shareMyCode} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="font-bold flex items-center"><Zap size={17} className="mr-2 text-amber-500 fill-amber-500"/> Próximos francos juntos</h3>
+                <span className={`text-[10px] font-bold ${textMuted}`}>120 días</span>
+              </div>
+              <p className={`text-[11px] mb-4 ${textMuted}`}>Calculados automáticamente con los diagramas disponibles.</p>
+              {upcomingCoincidences.length > 0 ? (
+                <div className="space-y-2">
+                  {upcomingCoincidences.map((window) => (
+                    <div key={`${window.friendId}-${window.startDate}`} className={`rounded-xl border p-3 flex items-center justify-between ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+                      <div className="min-w-0"><p className="font-bold text-sm truncate">{window.friendName}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(window.startDate)}{window.endDate !== window.startDate ? ` — ${formatShortDate(window.endDate)}` : ''}</p></div>
+                      <span className="text-xs font-black text-emerald-500 whitespace-nowrap ml-3">{window.days} {window.days === 1 ? 'día' : 'días'}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className={`rounded-xl p-4 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}>
+                  <p className="text-sm font-bold">Todavía no hay coincidencias calculables</p>
+                  <p className={`text-[10px] mt-1 ${textMuted}`}>{displayFriends.length ? 'Revisa que los diagramas estén disponibles.' : 'Invita a un compañero para comparar automáticamente.'}</p>
+                </div>
+              )}
+            </div>
+
+            <button onClick={shareMyCode} disabled={syncState !== 'ready'} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm disabled:opacity-50 ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
                <Smartphone size={18} />
-               <span className="font-bold text-sm">Enviar mi código a un contacto</span>
+               <span className="font-bold text-sm">{syncState === 'loading' ? 'Preparando código seguro…' : 'Enviar mi código a un contacto'}</span>
             </button>
 
             <div className={`rounded-2xl border overflow-hidden ${cardClasses[theme]}`}>
@@ -670,7 +1080,7 @@ export default function App() {
                   </form>
                 ) : (
                   <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
-                    <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-XXXXX" className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
+                    <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-AB12CD34" maxLength={11} className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
                   </form>
                 )}
               </div>
@@ -680,8 +1090,8 @@ export default function App() {
               <div className="space-y-2">
                 {displayFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
-                    <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className="ml-1.5 text-blue-400"/>}</p><p className={`text-xs ${textMuted}`}>Esquema: {friend.workDays}x{friend.restDays}</p></div>
-                    <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'friends', friend.id))} className="text-slate-500 hover:text-red-400 p-2"><Trash2 size={16}/></button>
+                    <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p></div>
+                    <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id))} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
                   </div>
                 ))}
               </div>
@@ -693,7 +1103,7 @@ export default function App() {
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
-               <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" />
+               <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" theme={theme} />
             </div>
             <form onSubmit={(e) => addGenericDoc(e, 'tasks', { title: e.target.elements.title.value, completed: false })} className="flex space-x-2">
               <input name="title" type="text" placeholder="Ej. Turno médico..." className={`flex-1 rounded-xl px-4 py-3 outline-none border shadow-sm ${inputBg}`} required/>
@@ -703,7 +1113,7 @@ export default function App() {
               {tasks.map(task => (
                 <div key={task.id} className={`flex items-center justify-between p-4 rounded-xl border group transition-all ${task.completed ? 'opacity-60' : ''} ${cardClasses[theme]}`}>
                   <div className="flex items-center space-x-3 overflow-hidden cursor-pointer flex-1" onClick={() => toggleTask(task)}><div className={`flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white" />}</div><span className={`truncate font-medium transition-all ${task.completed ? 'line-through opacity-50' : ''}`}>{task.title}</span></div>
-                  <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id))} className="text-slate-400 hover:text-red-400 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                  <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id))} className="text-slate-400 hover:text-red-400 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
                 </div>
               ))}
             </div>
@@ -714,40 +1124,57 @@ export default function App() {
         {activeTab === 'wealth' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="flex justify-between items-center mb-6">
-              <HeaderTitle icon={TrendingUp} title="Finanzas" colorClass="text-emerald-500" />
+              <HeaderTitle icon={TrendingUp} title="Finanzas" colorClass="text-emerald-500" theme={theme} />
               <button onClick={() => setPremiumView(!premiumView)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center ${premiumView ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/30' : (theme === 'light' ? 'bg-white text-indigo-500 border-indigo-200' : 'bg-slate-900 text-indigo-400 border-indigo-500/30')}`}>
-                 {premiumView ? <Target size={14} className="mr-1"/> : <LineChart size={14} className="mr-1"/>} {premiumView ? 'Ver Mis Metas' : 'Inversiones PRO'}
-              </button>
+                 {premiumView ? <Target size={14} className="mr-1"/> : <LineChart size={14} className="mr-1"/>} {premiumView ? 'Ver mis metas' : 'Ver mercados'}
+               </button>
+            </div>
+
+            <div className={`rounded-xl border px-4 py-3 text-[10px] leading-relaxed ${theme === 'light' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-amber-500/10 border-amber-500/20 text-amber-200'}`}>
+              Las cotizaciones son informativas y pueden estar demoradas. RosterMax no reemplaza asesoramiento financiero profesional ni recomienda inversiones específicas.
             </div>
 
             {!premiumView ? (
               <div className="space-y-6 animate-in fade-in">
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-                  <form onSubmit={(e) => { e.preventDefault(); addGenericDoc(e, 'goals', { title: e.target.elements.title.value, target: parseFloat(e.target.elements.target.value), current: 0, currency: e.target.elements.currency.value }); }} className="space-y-3">
+                  <form onSubmit={createFinancialGoal} className="space-y-3">
                     <div className="flex space-x-2">
                       <input name="title" type="text" placeholder="Ej. Cambio de auto" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                       <select name="currency" className={`w-20 rounded-xl px-2 py-2 text-sm outline-none border ${inputBg}`}>
                         <option value="USD">USD</option><option value="ARS">ARS</option>
                       </select>
                     </div>
-                    <input name="target" type="number" placeholder="Monto objetivo final" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input name="target" type="number" min="0.01" step="0.01" placeholder="Monto objetivo" aria-label="Monto objetivo" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                      <input name="monthlyPlan" type="number" min="0" step="0.01" placeholder="Aporte mensual (opcional)" aria-label="Aporte mensual planificado" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} />
+                    </div>
                     <button type="submit" className="w-full bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold py-2.5 rounded-xl border border-emerald-500/20 transition-colors">Crear Meta Financiera</button>
                   </form>
                 </div>
                 <div className="space-y-4">
                   {goals.map(goal => {
-                    const progress = goal.target > 0 ? (goal.current / goal.target) * 100 : 0;
+                    const projection = getGoalProjection(goal);
+                    const progress = projection?.progress || 0;
                     const isUSD = goal.currency === 'USD';
                     return (
                       <div key={goal.id} className={`rounded-2xl border p-5 ${cardClasses[theme]} relative overflow-hidden group`}>
                         {progress >= 100 && <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg flex items-center z-10"><Award size={12} className="mr-1"/> LOGRADO</div>}
-                        <div className="flex justify-between items-center mb-3"><span className="font-bold relative z-10 flex items-center">{goal.title} <span className="ml-2 text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">{goal.currency || 'USD'}</span></span><button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'goals', goal.id))} className="text-slate-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity relative z-10"><Trash2 size={14}/></button></div>
-                        <div className="flex items-end justify-between mb-2 relative z-10"><div className="flex items-baseline space-x-1"><span className="text-2xl font-black">{goal.current.toLocaleString()}</span><span className={`text-xs ${textMuted}`}>/ {goal.target.toLocaleString()}</span></div><span className="text-xs font-bold text-emerald-500">{progress.toFixed(0)}%</span></div>
+                        <div className="flex justify-between items-center mb-3"><span className="font-bold relative z-10 flex items-center">{goal.title} <span className="ml-2 text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">{goal.currency || 'USD'}</span></span><button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'goals', goal.id))} className="text-slate-400 hover:text-red-400 opacity-70 transition-opacity relative z-10" aria-label={`Eliminar meta ${goal.title}`}><Trash2 size={14}/></button></div>
+                        <div className="flex items-end justify-between mb-2 relative z-10"><div className="flex items-baseline space-x-1"><span className="text-2xl font-black">{formatAmount(goal.current, goal.currency)}</span><span className={`text-xs ${textMuted}`}>/ {formatAmount(goal.target, goal.currency)}</span></div><span className="text-xs font-bold text-emerald-500">{progress.toFixed(0)}%</span></div>
                         <div className={`h-2.5 w-full rounded-full overflow-hidden relative z-10 ${theme === 'light' ? 'bg-slate-200' : 'bg-slate-800'}`}><div className="h-full bg-emerald-500 rounded-full transition-all duration-1000 ease-out" style={{ width: `${Math.min(progress, 100)}%` }}></div></div>
+                        {projection?.monthsRemaining !== null && progress < 100 && (
+                          <p className={`mt-2 text-[10px] ${textMuted}`}>Plan: {formatAmount(projection.monthlyPlan, goal.currency)} al mes · aproximadamente {projection.monthsRemaining} {projection.monthsRemaining === 1 ? 'mes' : 'meses'}.</p>
+                        )}
                         {progress < 100 && (
-                          <div className="mt-4 flex space-x-2 relative z-10">
-                            <button onClick={() => addFunds(goal, isUSD ? 100 : 10000)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ {isUSD ? '$100' : '$10k'}</button>
-                            <button onClick={() => addFunds(goal, isUSD ? 1000 : 100000)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ {isUSD ? '$1k' : '$100k'}</button>
+                          <div className="mt-4 space-y-2 relative z-10">
+                            <form onSubmit={async (event) => { event.preventDefault(); const formElement = event.currentTarget; const saved = await addFunds(goal, new FormData(formElement).get('amount')); if (saved) formElement.reset(); }} className="flex gap-2">
+                              <input name="amount" type="number" min="0.01" step="0.01" placeholder="Registrar aporte" aria-label={`Aporte para ${goal.title}`} className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-xs outline-none border ${inputBg}`} required/>
+                              <button className="bg-emerald-500 text-white px-3 rounded-lg text-xs font-bold">Aportar</button>
+                            </form>
+                            <div className="flex space-x-2">
+                              <button onClick={() => addFunds(goal, isUSD ? 100 : 10000)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ {isUSD ? 'USD 100' : 'ARS 10k'}</button>
+                              <button onClick={() => addFunds(goal, goal.monthlyPlan || (isUSD ? 1000 : 100000))} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ plan mensual</button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -809,7 +1236,7 @@ export default function App() {
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             
             <div className="flex justify-between items-center mb-6">
-              <HeaderTitle icon={Settings} title="Ajustes" colorClass="text-slate-400" />
+              <HeaderTitle icon={Settings} title="Ajustes" colorClass="text-slate-400" theme={theme} />
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
             
@@ -844,13 +1271,51 @@ export default function App() {
             )}
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
-               <div><p className={`text-xs font-bold uppercase tracking-wider text-blue-500`}>Tu Código RosterMax</p><p className="font-mono text-lg tracking-widest mt-1">RM-{user?.uid?.substring(0, 5).toUpperCase() || 'XXXXX'}</p></div>
-               <button onClick={shareMyCode} className={`p-2 rounded-lg border active:scale-90 transition-transform ${theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
+               <div>
+                 <p className="text-xs font-bold uppercase tracking-wider text-blue-500">Tu Código RosterMax</p>
+                 <p className="font-mono text-lg tracking-widest mt-1">{syncState === 'loading' ? 'Preparando…' : syncCode || 'No disponible'}</p>
+                 {syncState === 'error' && <p className="text-[9px] text-red-400 mt-1">Revisa la conexión o los permisos.</p>}
+               </div>
+               <button onClick={shareMyCode} disabled={syncState !== 'ready'} className={`p-2 rounded-lg border active:scale-90 transition-transform disabled:opacity-40 ${theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
             </div>
+
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex gap-3">
+                  <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${reminderSettings.enabled ? 'bg-emerald-500/15 text-emerald-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}>
+                    {reminderSettings.enabled ? <BellRing size={19}/> : <Bell size={19}/>}
+                  </div>
+                  <div><h3 className="font-bold text-sm">Alertas de subida y bajada</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Te avisamos al abrir RosterMax cuando se acerca un cambio. Las alertas con la app cerrada llegarán en una fase Push posterior.</p></div>
+                </div>
+              </div>
+              <div className="grid grid-cols-[1fr_auto] gap-3 mt-4">
+                <select value={reminderSettings.leadDays} onChange={(event) => updateReminderLeadDays(event.target.value)} className={`rounded-xl px-3 py-2 text-xs border outline-none ${inputBg}`}>
+                  <option value="1">Avisar 1 día antes</option>
+                  <option value="2">Avisar 2 días antes</option>
+                  <option value="3">Avisar 3 días antes</option>
+                  <option value="7">Avisar 7 días antes</option>
+                </select>
+                {reminderSettings.enabled ? (
+                  <button type="button" onClick={disableTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold border border-red-500/30 text-red-400">Desactivar</button>
+                ) : (
+                  <button type="button" onClick={requestTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold bg-emerald-500 text-white">Activar</button>
+                )}
+              </div>
+            </div>
+
+            <button type="button" onClick={reopenOnboarding} className={`w-full rounded-2xl border p-4 flex items-center justify-between text-left ${cardClasses[theme]}`}>
+              <div><p className="font-bold text-sm">Volver a ver la guía inicial</p><p className={`text-[10px] mt-0.5 ${textMuted}`}>Reconfigura tu diagrama y nombre paso a paso.</p></div>
+              <ChevronRight size={18} className={textMuted}/>
+            </button>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos Laborales</h3>
               <form onSubmit={updateProfile} className="space-y-4">
+                <div>
+                  <label className={`block text-xs mb-1 ${textMuted} flex items-center`}><User size={12} className="mr-1"/> Nombre visible para compañeros</label>
+                  <input name="displayName" type="text" placeholder="Ej. Maxi" defaultValue={userProfile.displayName} maxLength={40} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} />
+                  <p className={`text-[9px] mt-1 ${textMuted}`}>No compartimos tu correo, empresa ni provincias mediante el código.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><Building2 size={12} className="mr-1"/> Empresa</label><input name="company" type="text" defaultValue={userProfile.company} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                   <div><label className={`block text-xs mb-1 ${textMuted} flex items-center`}><Target size={12} className="mr-1"/> Rubro</label>
@@ -871,6 +1336,28 @@ export default function App() {
                   <div><label className={`block text-[10px] uppercase font-bold mb-1 ${textMuted}`}>Prov. de Origen</label><input name="homeProvince" type="text" placeholder="Ej. Mendoza" defaultValue={userProfile.homeProvince} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                   <div><label className={`block text-[10px] uppercase font-bold mb-1 ${textMuted}`}>Prov. de Destino</label><input name="siteProvince" type="text" placeholder="Ej. Neuquén" defaultValue={userProfile.siteProvince} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} /></div>
                 </div>
+                <div className="border-t pt-4 mt-2 border-inherit">
+                  <label className={`block text-xs font-bold mb-1 ${textMuted} flex items-center`}><Thermometer size={12} className="mr-1"/> Ubicación para el clima</label>
+                  <p className={`text-[10px] mb-2 ${textMuted}`}>Busca una ciudad o localidad cercana al yacimiento y confirma la provincia.</p>
+                  <div className="flex gap-2">
+                    <input value={weatherQuery} onChange={(event) => setWeatherQuery(event.target.value)} type="search" placeholder="Ej. Añelo" className={`flex-1 min-w-0 rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} />
+                    <button type="button" onClick={handleWeatherSearch} disabled={weatherSearching} className="rounded-lg bg-blue-500 px-3 text-white text-xs font-bold disabled:opacity-50">{weatherSearching ? 'Buscando…' : 'Buscar'}</button>
+                  </div>
+                  {weatherOptions.length > 0 && (
+                    <div className={`mt-2 rounded-xl border overflow-hidden ${theme === 'light' ? 'border-slate-200' : 'border-slate-700'}`}>
+                      {weatherOptions.map((option) => (
+                        <button key={option.id} type="button" onClick={() => selectWeatherLocation(option)} className={`w-full text-left p-3 text-xs border-b last:border-b-0 ${theme === 'light' ? 'bg-white border-slate-200 hover:bg-slate-50' : 'bg-slate-900 border-slate-700 hover:bg-slate-800'}`}>
+                          <span className="font-bold block">{option.name}</span>
+                          <span className={textMuted}>{option.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className={`mt-3 rounded-lg p-3 flex items-start gap-2 ${theme === 'light' ? 'bg-blue-50 text-blue-700' : 'bg-blue-500/10 text-blue-300'}`}>
+                    <MapPin size={14} className="mt-0.5 flex-shrink-0"/>
+                    <div><p className="text-[10px] font-bold">Ubicación seleccionada</p><p className="text-[10px]">{userProfile.weatherLocation?.label || 'Sin configurar'}</p></div>
+                  </div>
+                </div>
                 <button type="submit" className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2.5 rounded-xl transition-all text-sm mt-2 shadow-lg shadow-indigo-500/20 active:scale-95">Guardar Perfil</button>
               </form>
             </div>
@@ -879,10 +1366,10 @@ export default function App() {
               <h3 className="font-bold flex items-center mb-4"><Calendar size={18} className="mr-2 text-emerald-500"/> Configuración de Diagrama</h3>
               <form onSubmit={updateRoster} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Trabajo</label><input name="workDays" type="number" defaultValue={rosterConfig.workDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
-                  <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Descanso</label><input name="restDays" type="number" defaultValue={rosterConfig.restDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
+                  <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Trabajo</label><input name="workDays" type="number" min="1" max="365" required defaultValue={rosterConfig.workDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
+                  <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Descanso</label><input name="restDays" type="number" min="1" max="365" required defaultValue={rosterConfig.restDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
                 </div>
-                <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida a yacimiento</label><input name="startDate" type="date" defaultValue={rosterConfig.startDate} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
+                <div><label className={`block text-xs mb-1 ${textMuted}`}>Inicio conocido de un ciclo de trabajo</label><input name="startDate" type="date" required defaultValue={rosterConfig.startDate} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /><p className={`text-[9px] mt-1 ${textMuted}`}>Puede ser una subida pasada o futura; calcularemos todo el calendario en ambos sentidos.</p></div>
                 <button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/30 transition-all active:scale-95">Actualizar Diagrama</button>
               </form>
             </div>
@@ -901,66 +1388,16 @@ export default function App() {
         {activeTab === 'admin' && isAdmin && (
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
              <div className="mb-6">
-                <HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" />
+                <HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" theme={theme} />
              </div>
 
-             <div className="grid grid-cols-2 gap-4">
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-blue-500`}>
-                  <Users2 size={24} className="text-blue-500 mb-2"/>
-                  <div className="flex items-baseline space-x-2">
-                    <span className="text-3xl font-black">{userStats.total}</span>
-                    <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">({userStats.linked} PRO)</span>
-                  </div>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Descargas vs Blindadas</p>
-                </div>
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-t-4 border-t-emerald-500`}>
-                  <Megaphone size={24} className="text-emerald-500 mb-2"/>
-                  <span className="text-3xl font-black">{currentAd ? '1' : '0'}</span>
-                  <p className={`text-[10px] uppercase font-bold tracking-widest ${textMuted} mt-1`}>Anuncios Activos</p>
-                </div>
-             </div>
-             
-             {/* PANEL DEMOGRÁFICO */}
-             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-                <h3 className="font-bold flex items-center mb-4"><MapPin size={18} className="mr-2 text-indigo-500"/> Mapa Demográfico</h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className={`text-[10px] uppercase tracking-widest font-bold mb-2 ${textMuted}`}>Origen Top</p>
-                    {Object.entries(demographics.home).length > 0 ? Object.entries(demographics.home).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([prov, count]) => (
-                      <div key={prov} className="flex justify-between items-center mb-1"><span className="truncate pr-2">{prov}</span> <span className="font-bold text-indigo-500">{count}</span></div>
-                    )) : <p className="text-xs italic opacity-50">Sin datos</p>}
-                  </div>
-                  <div>
-                    <p className={`text-[10px] uppercase tracking-widest font-bold mb-2 ${textMuted}`}>Yacimiento Top</p>
-                    {Object.entries(demographics.site).length > 0 ? Object.entries(demographics.site).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([prov, count]) => (
-                      <div key={prov} className="flex justify-between items-center mb-1"><span className="truncate pr-2">{prov}</span> <span className="font-bold text-indigo-500">{count}</span></div>
-                    )) : <p className="text-xs italic opacity-50">Sin datos</p>}
-                  </div>
-                </div>
-             </div>
-
-             {/* LISTADO DE USUARIOS REGISTRADOS */}
-             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-                <h3 className="font-bold flex items-center mb-4"><Users size={18} className="mr-2 text-blue-500"/> Registro de Usuarios</h3>
-                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {demographics.list && demographics.list.length > 0 ? demographics.list.map(u => (
-                    <div key={u.uid} className={`p-3 rounded-xl border text-xs flex flex-col space-y-1 ${theme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold truncate max-w-[65%]">{u.name}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${u.isAnonymous ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500'}`}>
-                          {u.isAnonymous ? 'Invitado' : 'PRO'}
-                        </span>
-                      </div>
-                      <div className={`text-[10px] ${textMuted} flex flex-col space-y-0.5`}>
-                        <p>Origen: <span className="font-semibold text-inherit">{u.homeProvince}</span></p>
-                        <p>Yacimiento: <span className="font-semibold text-inherit">{u.siteProvince}</span></p>
-                        <p>Último ingreso: <span className="font-semibold text-inherit">{u.lastLogin}</span></p>
-                      </div>
-                    </div>
-                  )) : (
-                    <p className="text-xs italic opacity-50 text-center py-4">No hay usuarios registrados aún.</p>
-                  )}
-                </div>
+             <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-emerald-500`}>
+               <p className="font-bold text-emerald-500 flex items-center"><ShieldAlert size={18} className="mr-2"/> Acceso verificado por servidor</p>
+               <p className={`text-xs mt-2 ${textMuted}`}>Este panel solo aparece cuando Firebase entrega el rol administrativo. Las métricas individuales fueron retiradas para proteger la privacidad de los trabajadores.</p>
+               <div className="mt-4 flex items-center justify-between">
+                 <span className={`text-xs ${textMuted}`}>Campañas activas</span>
+                 <span className="text-xl font-black text-amber-500">{currentAd ? '1' : '0'}</span>
+               </div>
              </div>
 
              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-10">

@@ -1,11 +1,15 @@
 {
   "name": "RosterMax",
   "short_name": "RosterMax",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait-primary",
   "background_color": "#020617",
   "theme_color": "#10b981",
-  "description": "La app N°1 para el trabajador de diagrama",
+  "description": "Organiza tu roster, tus francos y tus metas en un solo lugar.",
+  "categories": ["productivity", "finance", "utilities"],
   "icons": [
     {
       "src": "/logo.svg",
