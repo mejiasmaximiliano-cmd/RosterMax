@@ -73,12 +73,37 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function validReciprocalFriend(data, appId, userId, friendId) {
+      return signedIn()
+        && friendId == request.auth.uid
+        && data.keys().hasOnly([
+          'name', 'friendUid', 'syncCode', 'isSynced', 'reciprocal', 'inviteCode', 'createdAt'
+        ])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 40
+        && data.friendUid == request.auth.uid
+        && data.syncCode is string && data.syncCode.matches('^RM-[A-Z0-9]{8}$')
+        && data.isSynced == true
+        && data.reciprocal == true
+        && data.inviteCode is string && data.inviteCode.matches('^RM-[A-Z0-9]{8}$')
+        && data.inviteCode != data.syncCode
+        && data.createdAt is timestamp
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(data.inviteCode)).data.ownerUid == userId
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(data.syncCode)).data.ownerUid == request.auth.uid;
+    }
+
     match /artifacts/{appId} {
       // El registro de administradores se crea únicamente desde la consola o
       // un entorno servidor. Cada usuario solo puede comprobar su propio rol.
       match /admins/{userId} {
         allow get: if owns(userId);
         allow list, create, update, delete: if false;
+      }
+
+      // Quien acepta un enlace solo puede insertar su propio roster público
+      // en la lista del remitente. No obtiene lectura del espacio privado ni
+      // puede representar a otro usuario.
+      match /users/{userId}/friends/{friendId} {
+        allow create, update: if validReciprocalFriend(request.resource.data, appId, userId, friendId);
       }
 
       // Cada usuario solo puede leer y modificar su propio espacio privado.

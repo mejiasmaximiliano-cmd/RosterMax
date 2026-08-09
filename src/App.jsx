@@ -14,7 +14,7 @@ import {
   signInAnonymously, onAuthStateChanged, getIdTokenResult,
   GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut,
 } from 'firebase/auth';
-import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { APP_ID, auth, db } from './lib/firebase';
 import { addDaysToDate, getNextTransition, getStatusForDate, validateRosterConfig } from './lib/roster';
 import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
@@ -24,6 +24,7 @@ import { getTransitionReminder } from './lib/reminders';
 import { getGoalProjection } from './lib/finance';
 import { getAuthErrorMessage } from './lib/auth';
 import { selectActiveCampaign, validateCampaign } from './lib/ads';
+import { buildReciprocalFriendRecord, buildSyncedFriendRecord, findExistingConnection } from './lib/connections';
 import OnboardingModal from './components/OnboardingModal';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
@@ -562,7 +563,7 @@ export default function App() {
     inviteUrl.searchParams.set('sync', syncCode);
     const shareData = {
       title: 'Mi roster en RosterMax',
-      text: `¡Comparemos nuestros francos! Mi código es ${syncCode}.`,
+      text: `¡Comparemos nuestros francos! Mi código es ${syncCode}. Al aceptar, ambos podremos ver nuestros rosters.`,
       url: inviteUrl.toString(),
     };
     if (navigator.share) {
@@ -700,7 +701,7 @@ export default function App() {
   };
 
   // --- MULTIJUGADOR: PROCESO REAL DE VINCULACIÓN ---
-  const linkSyncCode = async (rawCode) => {
+  const linkSyncCode = async (rawCode, { reciprocal = false } = {}) => {
     const codeInput = normalizeSyncCode(rawCode);
     if (!isValidSyncCode(codeInput)) {
       showToast("El código debe tener el formato RM-XXXXXXXX.");
@@ -718,19 +719,58 @@ export default function App() {
         showToast("No puedes sincronizarte contigo mismo.");
         return false;
       }
-      if (friends.some((friend) => friend.friendUid === foundUser.ownerUid || friend.syncCode === codeInput)) {
+      const existingConnection = findExistingConnection(friends, foundUser.ownerUid, codeInput);
+      if (existingConnection && !reciprocal) {
         showToast("Este compañero ya está en tu lista.");
         return false;
       }
 
-      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), {
-        name: foundUser.name || "Compañero Sincronizado",
-        friendUid: foundUser.ownerUid,
-        syncCode: codeInput,
-        isSynced: true,
-        createdAt: serverTimestamp(),
-      });
-      showToast(`¡Sincronizado con ${foundUser.name}!`);
+      if (reciprocal) {
+        if (syncState !== 'ready' || !isValidSyncCode(syncCode)) {
+          showToast('Tu código todavía se está preparando. Inténtalo nuevamente.');
+          return false;
+        }
+
+        // Garantiza que el roster del invitado exista antes de autorizar el
+        // registro recíproco mediante las reglas de Firestore.
+        await setDoc(getSyncCodeRef(syncCode), {
+          ownerUid: user.uid,
+          syncCode,
+          name: getPublicName(user, userProfile),
+          workDays: rosterConfig.workDays,
+          restDays: rosterConfig.restDays,
+          startDate: rosterConfig.startDate,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+
+        const batch = writeBatch(db);
+        if (!existingConnection) {
+          batch.set(
+            doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', foundUser.ownerUid),
+            { ...buildSyncedFriendRecord(foundUser, codeInput), createdAt: serverTimestamp() },
+          );
+        }
+        batch.set(
+          doc(db, 'artifacts', APP_ID, 'users', foundUser.ownerUid, 'friends', user.uid),
+          {
+            ...buildReciprocalFriendRecord({
+              uid: user.uid,
+              name: getPublicName(user, userProfile),
+              syncCode,
+              inviteCode: codeInput,
+            }),
+            createdAt: serverTimestamp(),
+          },
+        );
+        await batch.commit();
+        showToast(`¡Listo! Tú y ${foundUser.name} ya comparten sus rosters.`);
+      } else {
+        await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), {
+          ...buildSyncedFriendRecord(foundUser, codeInput),
+          createdAt: serverTimestamp(),
+        });
+        showToast(`¡Sincronizado con ${foundUser.name}!`);
+      }
       return true;
     } catch (error) {
       console.error('No se pudo guardar la vinculación.', error);
@@ -742,12 +782,12 @@ export default function App() {
   const handleSyncAdd = async (event) => {
     event.preventDefault();
     const formElement = event.currentTarget;
-    const linked = await linkSyncCode(formElement.elements.syncCode.value);
+    const linked = await linkSyncCode(formElement.elements.syncCode.value, { reciprocal: true });
     if (linked) formElement.reset();
   };
 
   const acceptPendingInvite = async () => {
-    const linked = await linkSyncCode(pendingInviteCode);
+    const linked = await linkSyncCode(pendingInviteCode, { reciprocal: true });
     if (linked) clearPendingInvite();
   };
 
@@ -1113,13 +1153,13 @@ export default function App() {
                     {pendingInvite.loading && <p className={`text-sm mt-1 ${textMuted}`}>Comprobando el enlace…</p>}
                     {pendingInvite.error && <p className="text-sm mt-1 text-red-400">{pendingInvite.error}</p>}
                     {pendingInvite.data && (
-                      <><p className="font-black text-lg mt-1 truncate">{pendingInvite.data.name}</p><p className={`text-xs ${textMuted}`}>Comparte un roster {pendingInvite.data.workDays}x{pendingInvite.data.restDays}. Tú decides si añadirlo.</p></>
+                      <><p className="font-black text-lg mt-1 truncate">{pendingInvite.data.name}</p><p className={`text-xs ${textMuted}`}>Comparte un roster {pendingInvite.data.workDays}x{pendingInvite.data.restDays}. Al aceptar, ambos podrán ver el roster del otro y encontrar francos coincidentes.</p></>
                     )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <button type="button" onClick={clearPendingInvite} className={`py-2.5 rounded-xl border text-xs font-bold ${inputBg}`}>Descartar</button>
-                  <button type="button" onClick={acceptPendingInvite} disabled={!pendingInvite.data || pendingInvite.loading} className="py-2.5 rounded-xl bg-blue-500 text-white text-xs font-bold disabled:opacity-50">Añadir compañero</button>
+                  <button type="button" onClick={acceptPendingInvite} disabled={!pendingInvite.data || pendingInvite.loading || syncState !== 'ready'} className="py-2.5 rounded-xl bg-blue-500 text-white text-xs font-bold disabled:opacity-50">Aceptar y compartir</button>
                 </div>
               </div>
             )}
@@ -1203,6 +1243,7 @@ export default function App() {
                   </form>
                 ) : (
                   <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
+                    <p className={`text-[11px] ${textMuted}`}>Al vincular el código, ambos compañeros compartirán su roster mínimo.</p>
                     <div className="relative"><input name="syncCode" type="text" placeholder="Ej. RM-AB12CD34" maxLength={11} className={`w-full rounded-xl px-4 py-3 text-sm outline-none border tracking-widest font-mono uppercase ${inputBg}`} required /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-blue-500 hover:bg-blue-600 text-white px-4 rounded-lg font-bold transition-colors text-xs">Vincular</button></div>
                   </form>
                 )}

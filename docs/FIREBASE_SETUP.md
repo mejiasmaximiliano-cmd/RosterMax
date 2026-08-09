@@ -35,6 +35,8 @@ El roster mínimo compartible se publica usando el código como identificador en
 
 Las reglas permiten consultar un documento exacto, pero deniegan listar la colección completa.
 
+Al aceptar un enlace, el invitado puede crear o actualizar exclusivamente el documento con su propio UID dentro de la lista de compañeros del remitente. Las reglas validan que el código de invitación pertenezca al remitente y que el código compartido pertenezca al usuario autenticado. Este permiso no permite leer otros datos privados ni añadir a terceros.
+
 ## Campañas y comentarios de beta
 
 Las campañas viven en:

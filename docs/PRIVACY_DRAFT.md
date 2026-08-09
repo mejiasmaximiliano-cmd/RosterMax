@@ -36,7 +36,7 @@ RosterMax no publica un directorio de trabajadores. Al compartir un código, otr
 
 No se incluyen correo, empresa, provincias, tareas, metas ni bitácoras.
 
-Los enlaces de invitación contienen el mismo código privado. El destinatario ve una vista previa y debe confirmar antes de añadir al compañero.
+Los enlaces de invitación contienen el mismo código privado. El destinatario ve una vista previa y debe confirmar una vinculación recíproca: cada participante podrá consultar el nombre visible y el roster mínimo del otro. La aplicación no comparte estos datos de forma recíproca hasta que el destinatario pulsa `Aceptar y compartir`.
 
 ## Alertas
 

@@ -14,7 +14,7 @@ Empezar con entre 5 y 10 colegas de confianza durante una o dos semanas. Pedirle
 
 1. abran exclusivamente el enlace de Vercel;
 2. configuren su roster y guarden su cuenta con Google;
-3. compartan el enlace de invitación con una sola persona;
+3. compartan el enlace de invitación con una sola persona y confirmen que ambos aparecen en sus equipos;
 4. prueben una fecha de coincidencia;
 5. informen cualquier problema desde `Ajustes > Comentarios de la beta`.
 
