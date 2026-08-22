@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calendar, CheckSquare, TrendingUp, User, 
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
@@ -6,9 +6,11 @@ import {
   CheckCircle2, Circle, X, Award, Users,
   Plane, Thermometer, Zap, Wind,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
-  CloudOff, ShieldAlert, Globe, Download, Send, Smartphone, LineChart,
+  CloudOff, ShieldAlert, Download, Send, Smartphone,
   Megaphone, Bell, BellRing, Clock3, Link2, LogIn, LogOut,
-  ExternalLink, MessageSquare, PauseCircle
+  ExternalLink, MessageSquare, PauseCircle, Umbrella, Stethoscope,
+  CalendarRange, WalletCards, Receipt, BarChart3, Activity, ChevronDown,
+  ChevronUp, Filter, Clock, PiggyBank
 } from 'lucide-react';
 import { 
   signInAnonymously, onAuthStateChanged, getIdTokenResult,
@@ -16,19 +18,46 @@ import {
 } from 'firebase/auth';
 import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { APP_ID, auth, db } from './lib/firebase';
-import { addDaysToDate, getNextTransition, getStatusForDate, validateRosterConfig } from './lib/roster';
+import {
+  SCHEDULE_EXCEPTION_TYPES,
+  addDaysToDate,
+  getNextTransition,
+  getStatusForDate,
+  sanitizeSharedExceptions,
+  validateRosterConfig,
+  validateScheduleException,
+} from './lib/roster';
 import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
 import { fetchCurrentWeather, searchWeatherLocations } from './lib/weather';
-import { findRestCoincidences } from './lib/coincidences';
+import { findRestCoincidences, groupCoincidenceWindows } from './lib/coincidences';
 import { getTransitionReminder } from './lib/reminders';
-import { getGoalProjection } from './lib/finance';
+import { getGoalProjection, getMonthlyBudgetSummary } from './lib/finance';
 import { getAuthErrorMessage } from './lib/auth';
 import { selectActiveCampaign, validateCampaign } from './lib/ads';
 import { buildReciprocalFriendRecord, buildSyncedFriendRecord, findExistingConnection } from './lib/connections';
+import { getNextRestWindow, getTaskSummary, sortTasks } from './lib/planning';
+import { getAudienceSummary, getCampaignSummary } from './lib/analytics';
 import OnboardingModal from './components/OnboardingModal';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = import.meta.env.VITE_PUBLIC_APP_URL || 'https://rostermax.vercel.app';
+const APP_VERSION = 'beta-0.4';
+
+const EXCEPTION_LABELS = {
+  vacation: 'Vacaciones',
+  medical: 'Carpeta médica',
+  leave: 'Permiso / licencia',
+  extra_work: 'Trabajo extra',
+  special_roster: 'Roster especial',
+};
+
+const TASK_CATEGORY_LABELS = {
+  personal: 'Personal',
+  family: 'Familia',
+  health: 'Salud',
+  paperwork: 'Trámites',
+  learning: 'Formación',
+};
 
 function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
@@ -77,6 +106,25 @@ function getSyncCodeRef(code) {
   return doc(db, 'artifacts', APP_ID, 'public', 'data', 'sync_codes', code);
 }
 
+async function trackCampaignMetric(currentUser, campaignId, type) {
+  if (!currentUser || !campaignId || !['view', 'click'].includes(type)) return;
+  const metricRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'campaign_metrics', `${campaignId}_${currentUser.uid}`);
+  await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(metricRef);
+    const current = snapshot.exists() ? snapshot.data() : {};
+    const views = Math.max(0, Number(current.views || 0)) + (type === 'view' ? 1 : 0);
+    const clicks = Math.max(0, Number(current.clicks || 0)) + (type === 'click' ? 1 : 0);
+    transaction.set(metricRef, {
+      ownerUid: currentUser.uid,
+      campaignId,
+      views,
+      clicks,
+      firstViewAt: current.firstViewAt || serverTimestamp(),
+      lastEventAt: serverTimestamp(),
+    });
+  });
+}
+
 function HeaderTitle({ icon: Icon, title, colorClass, theme }) {
   const cardClass = theme === 'light'
     ? 'bg-white border-slate-200 shadow-sm'
@@ -94,13 +142,20 @@ function HeaderTitle({ icon: Icon, title, colorClass, theme }) {
   );
 }
 
+function ScheduleExceptionIcon({ type, size = 18 }) {
+  if (type === 'vacation') return <Umbrella size={size}/>;
+  if (type === 'medical') return <Stethoscope size={size}/>;
+  if (type === 'special_roster') return <CalendarRange size={size}/>;
+  if (type === 'extra_work') return <Briefcase size={size}/>;
+  return <Clock size={size}/>;
+}
+
 export default function App() {
   // --- STATES ---
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState(() => getInviteCodeFromLocation() ? 'crew' : 'roster');
   const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState('dark'); 
-  const [premiumView, setPremiumView] = useState(false); 
   const [addMethod, setAddMethod] = useState(() => getInviteCodeFromLocation() ? 'sync' : 'manual');
   
   // States: UX, PWA, Admin & Auth
@@ -122,6 +177,12 @@ export default function App() {
   const [goals, setGoals] = useState([]);
   const [logs, setLogs] = useState([]); 
   const [friends, setFriends] = useState([]); 
+  const [scheduleExceptions, setScheduleExceptions] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [financeSettings, setFinanceSettings] = useState({ monthlyIncome: 0, fixedCosts: 0, plannedSavings: 0, currency: 'ARS' });
+  const [privacySettings, setPrivacySettings] = useState({ analyticsEnabled: false });
+  const [activityMetrics, setActivityMetrics] = useState([]);
+  const [campaignMetrics, setCampaignMetrics] = useState([]);
   const [friendLiveData, setFriendLiveData] = useState({});
   const [syncCode, setSyncCode] = useState('');
   const [syncState, setSyncState] = useState('loading');
@@ -131,19 +192,23 @@ export default function App() {
   const [targetDate, setTargetDate] = useState('');
   const [ads, setAds] = useState([]);
   const [feedbackItems, setFeedbackItems] = useState([]);
+  const [crewSearch, setCrewSearch] = useState('');
+  const [showAllFriends, setShowAllFriends] = useState(false);
+  const [showAllCoincidences, setShowAllCoincidences] = useState(false);
+  const [taskFilter, setTaskFilter] = useState('open');
+  const [showExceptionForm, setShowExceptionForm] = useState(false);
+  const [exceptionType, setExceptionType] = useState('vacation');
+  const [installDetected, setInstallDetected] = useState(() => (
+    localStorage.getItem('rostermax:installed') === '1'
+    || window.matchMedia?.('(display-mode: standalone)').matches
+  ));
+  const adContainerRef = useRef(null);
 
   // API States
   const [weatherData, setWeatherData] = useState({ temp: '--', loading: false, error: '' });
   const [weatherQuery, setWeatherQuery] = useState('');
   const [weatherOptions, setWeatherOptions] = useState([]);
   const [weatherSearching, setWeatherSearching] = useState(false);
-  const [marketData, setMarketData] = useState({ 
-    SPY: { price: '...', change: '...' }, 
-    XLE: { price: '...', change: '...' },
-    YPF: { price: '...', change: '...' },
-    PAM: { price: '...', change: '...' }
-  });
-
   // --- SISTEMA DE NOTIFICACIONES (TOAST) ---
   const showToast = (message) => {
     setToast(message);
@@ -164,11 +229,17 @@ export default function App() {
       setInstallPrompt(e);
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    const handleAppInstalled = () => {
+      localStorage.setItem('rostermax:installed', '1');
+      setInstallDetected(true);
+    };
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
@@ -256,7 +327,8 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user]);
 
-  // Publica únicamente el calendario compartible, sin provincia, correo ni métricas.
+  // Publica únicamente el calendario compartible. Los motivos privados de
+  // ausencias se eliminan antes de sincronizar con compañeros.
   useEffect(() => {
     if (!user || !syncCode) return;
     setDoc(getSyncCodeRef(syncCode), {
@@ -266,12 +338,13 @@ export default function App() {
       workDays: rosterConfig.workDays,
       restDays: rosterConfig.restDays,
       startDate: rosterConfig.startDate,
+      exceptions: sanitizeSharedExceptions(scheduleExceptions),
       updatedAt: serverTimestamp(),
     }, { merge: true }).catch((error) => {
       console.error('No se pudo publicar el roster compartible.', error);
       setSyncState('error');
     });
-  }, [user, syncCode, userProfile, rosterConfig.workDays, rosterConfig.restDays, rosterConfig.startDate]);
+  }, [user, syncCode, userProfile, rosterConfig.workDays, rosterConfig.restDays, rosterConfig.startDate, scheduleExceptions]);
 
   // --- BASE DE DATOS PRIVADA EN TIEMPO REAL ---
   useEffect(() => {
@@ -293,6 +366,12 @@ export default function App() {
     const unsubReminders = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), (snapshot) => {
       if (snapshot.exists()) setReminderSettings({ enabled: false, leadDays: 1, ...snapshot.data() });
     }, logRealtimeError('recordatorios'));
+    const unsubFinanceSettings = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'finance'), (snapshot) => {
+      if (snapshot.exists()) setFinanceSettings((current) => ({ ...current, ...snapshot.data() }));
+    }, logRealtimeError('presupuesto'));
+    const unsubPrivacy = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'privacy'), (snapshot) => {
+      if (snapshot.exists()) setPrivacySettings((current) => ({ ...current, ...snapshot.data() }));
+    }, logRealtimeError('privacidad'));
     const unsubOnboarding = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), (snapshot) => {
       const completed = snapshot.exists() && snapshot.data().completed === true;
       if (!completed && localStorage.getItem(ONBOARDING_DISMISS_KEY) !== '1') setShowOnboarding(true);
@@ -302,6 +381,12 @@ export default function App() {
     const unsubGoals = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), (s) => setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('metas'));
     const unsubLogs = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('bitácora'));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('compañeros'));
+    const unsubExceptions = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), (snapshot) => setScheduleExceptions(snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .sort((left, right) => left.startDate.localeCompare(right.startDate))), logRealtimeError('cambios de roster'));
+    const unsubExpenses = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), (snapshot) => setExpenses(snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .sort((left, right) => String(right.date).localeCompare(String(left.date)))), logRealtimeError('gastos'));
     
     const unsubAds = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'ads'), (snapshot) => {
       setAds(snapshot.docs.map((adDoc) => ({ id: adDoc.id, ...adDoc.data() })));
@@ -312,14 +397,39 @@ export default function App() {
       unsubProfile(); 
       unsubTheme(); 
       unsubReminders();
+      unsubFinanceSettings();
+      unsubPrivacy();
       unsubOnboarding();
       unsubTasks(); 
       unsubGoals(); 
       unsubLogs(); 
       unsubFriends(); 
+      unsubExceptions();
+      unsubExpenses();
       unsubAds(); 
     };
   }, [user]);
+
+  // Métricas propias, agregadas en el panel CEO y desactivadas por defecto.
+  // Nunca se envían nombres, correos, empresa, ubicación ni contenido privado.
+  useEffect(() => {
+    if (!user || !privacySettings.analyticsEnabled) return;
+    const activityRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid);
+    runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(activityRef);
+      transaction.set(activityRef, {
+        ownerUid: user.uid,
+        accountType: user.isAnonymous ? 'guest' : 'google',
+        firstSeenAt: snapshot.exists() ? snapshot.data().firstSeenAt : serverTimestamp(),
+        lastActiveAt: serverTimestamp(),
+        lastActiveDay: getTodayDate(),
+        installDetected,
+        rosterConfigured: validateRosterConfig(rosterConfig).valid,
+        profileComplete: Boolean(userProfile.displayName?.trim()),
+        appVersion: APP_VERSION,
+      });
+    }).catch((error) => console.error('No se pudo actualizar la métrica anónima de actividad.', error));
+  }, [user, privacySettings.analyticsEnabled, installDetected, rosterConfig, userProfile.displayName]);
 
   useEffect(() => {
     if (!user || !isAdmin) return undefined;
@@ -331,6 +441,21 @@ export default function App() {
         .sort((left, right) => Number(right.createdAt?.seconds || 0) - Number(left.createdAt?.seconds || 0))),
       (error) => console.error('No se pudo cargar el feedback de beta.', error),
     );
+  }, [user, isAdmin]);
+
+  useEffect(() => {
+    if (!user || !isAdmin) return undefined;
+    const unsubscribeActivity = onSnapshot(
+      collection(db, 'artifacts', APP_ID, 'public', 'data', 'activity'),
+      (snapshot) => setActivityMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+      (error) => console.error('No se pudieron cargar las métricas de audiencia.', error),
+    );
+    const unsubscribeCampaigns = onSnapshot(
+      collection(db, 'artifacts', APP_ID, 'public', 'data', 'campaign_metrics'),
+      (snapshot) => setCampaignMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
+      (error) => console.error('No se pudieron cargar las métricas de campañas.', error),
+    );
+    return () => { unsubscribeActivity(); unsubscribeCampaigns(); };
   }, [user, isAdmin]);
 
   // Solo escucha los códigos que el usuario agregó explícitamente.
@@ -392,6 +517,7 @@ export default function App() {
             workDays: liveData.workDays,
             restDays: liveData.restDays,
             startDate: liveData.startDate,
+            exceptions: Array.isArray(liveData.exceptions) ? liveData.exceptions : [],
             syncAvailable: true,
           };
         }
@@ -426,7 +552,7 @@ export default function App() {
   // de la ventana elegida. Las notificaciones con la app cerrada requerirán Push.
   useEffect(() => {
     if (!reminderSettings.enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    const reminder = getTransitionReminder(getTodayDate(), rosterConfig, reminderSettings.leadDays);
+    const reminder = getTransitionReminder(getTodayDate(), { ...rosterConfig, exceptions: scheduleExceptions }, reminderSettings.leadDays);
     if (!reminder) return;
 
     const notificationKey = `rostermax:notified:${reminder.id}`;
@@ -451,49 +577,32 @@ export default function App() {
       }
     };
     notify();
-  }, [reminderSettings, rosterConfig]);
+  }, [reminderSettings, rosterConfig, scheduleExceptions]);
 
-  // --- FINANZAS MERVAL & USA ---
-  useEffect(() => {
-    if (activeTab !== 'wealth' || !premiumView) return;
-    const fetchMarkets = async () => {
-      const fetchTicker = async (symbol) => {
-        try {
-          const res = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d`)}`);
-          const data = await res.json();
-          const parsed = JSON.parse(data.contents);
-          const meta = parsed.chart.result[0].meta;
-          const price = meta.regularMarketPrice;
-          const prevClose = meta.chartPreviousClose || meta.previousClose || price; 
-          
-          if (!price) throw new Error("No data");
-          
-          const changePercent = (((price - prevClose) / prevClose) * 100).toFixed(2);
-          return { price: price.toFixed(2), change: changePercent > 0 ? `+${changePercent}%` : `${changePercent}%`, isUp: changePercent >= 0 };
-        } catch {
-          return { price: 'N/A', change: '--', isUp: true }; 
-        }
-      };
-      
-      const spyData = await fetchTicker('SPY');
-      const xleData = await fetchTicker('XLE');
-      const ypfData = await fetchTicker('YPF'); 
-      const pamData = await fetchTicker('PAM'); 
-      
-      setMarketData({ SPY: spyData, XLE: xleData, YPF: ypfData, PAM: pamData });
-    };
-    fetchMarkets();
-  }, [activeTab, premiumView]);
-
-  const currentStatus = useMemo(() => getStatusForDate(getTodayDate(), rosterConfig), [rosterConfig]);
-  const nextTransition = useMemo(() => getNextTransition(getTodayDate(), rosterConfig), [rosterConfig]);
-  const targetStatus = useMemo(() => getStatusForDate(targetDate, rosterConfig), [targetDate, rosterConfig]);
+  const effectiveRoster = useMemo(() => ({ ...rosterConfig, exceptions: scheduleExceptions }), [rosterConfig, scheduleExceptions]);
+  const currentStatus = useMemo(() => getStatusForDate(getTodayDate(), effectiveRoster), [effectiveRoster]);
+  const nextTransition = useMemo(() => getNextTransition(getTodayDate(), effectiveRoster), [effectiveRoster]);
+  const targetStatus = useMemo(() => getStatusForDate(targetDate, effectiveRoster), [targetDate, effectiveRoster]);
   const upcomingCoincidences = useMemo(() => findRestCoincidences(
     getTodayDate(),
-    rosterConfig,
+    effectiveRoster,
     displayFriends.filter((friend) => friend.syncAvailable !== false),
-    { horizonDays: 120, maxResults: 6 },
-  ), [rosterConfig, displayFriends]);
+    { horizonDays: 120, maxResults: 40 },
+  ), [effectiveRoster, displayFriends]);
+  const groupedCoincidences = useMemo(() => groupCoincidenceWindows(upcomingCoincidences), [upcomingCoincidences]);
+  const visibleCoincidences = showAllCoincidences ? groupedCoincidences : groupedCoincidences.slice(0, 3);
+  const filteredFriends = useMemo(() => displayFriends
+    .filter((friend) => friend.name?.toLowerCase().includes(crewSearch.trim().toLowerCase()))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name), 'es')), [displayFriends, crewSearch]);
+  const visibleFriends = showAllFriends ? filteredFriends : filteredFriends.slice(0, 6);
+  const nextRestWindow = useMemo(() => getNextRestWindow(getTodayDate(), effectiveRoster), [effectiveRoster]);
+  const orderedTasks = useMemo(() => sortTasks(tasks), [tasks]);
+  const taskSummary = useMemo(() => getTaskSummary(tasks, getTodayDate()), [tasks]);
+  const visibleTasks = useMemo(() => orderedTasks.filter((task) => (
+    taskFilter === 'all' || (taskFilter === 'done' ? task.completed : !task.completed)
+  )), [orderedTasks, taskFilter]);
+  const budgetSummary = useMemo(() => getMonthlyBudgetSummary(financeSettings, expenses, rosterConfig, getTodayDate().slice(0, 7)), [financeSettings, expenses, rosterConfig]);
+  const audienceSummary = useMemo(() => getAudienceSummary(activityMetrics), [activityMetrics]);
   const currentAd = useMemo(
     () => selectActiveCampaign(ads, userProfile, getTodayDate()),
     [ads, userProfile],
@@ -502,6 +611,27 @@ export default function App() {
     () => ads.filter((ad) => ad.active === true && (!ad.endDate || ad.endDate >= getTodayDate())).length,
     [ads],
   );
+
+  useEffect(() => {
+    if (!currentAd?.id || !privacySettings.analyticsEnabled || !adContainerRef.current || typeof IntersectionObserver === 'undefined') return undefined;
+    const sessionKey = `rostermax:ad-view:${currentAd.id}`;
+    if (sessionStorage.getItem(sessionKey) === '1') return undefined;
+    let timer = null;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.intersectionRatio >= 0.5) {
+        if (!timer) timer = setTimeout(() => {
+          sessionStorage.setItem(sessionKey, '1');
+          trackCampaignMetric(user, currentAd.id, 'view').catch((error) => console.error('No se pudo registrar la impresión.', error));
+          observer.disconnect();
+        }, 1000);
+      } else if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    }, { threshold: [0.5] });
+    observer.observe(adContainerRef.current);
+    return () => { if (timer) clearTimeout(timer); observer.disconnect(); };
+  }, [currentAd, privacySettings.analyticsEnabled, user]);
 
   // --- HANDLERS ACCIONES PWA ---
   const handleInstallClick = async () => {
@@ -740,6 +870,7 @@ export default function App() {
           workDays: rosterConfig.workDays,
           restDays: rosterConfig.restDays,
           startDate: rosterConfig.startDate,
+          exceptions: sanitizeSharedExceptions(scheduleExceptions),
           updatedAt: serverTimestamp(),
         }, { merge: true });
 
@@ -839,7 +970,114 @@ export default function App() {
   };
 
   const toggleLog = async (log) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { ...log, resolved: !log.resolved });
-  const toggleTask = async (task) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), { ...task, completed: !task.completed });
+  const toggleTask = async (task) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), { completed: !task.completed, updatedAt: serverTimestamp() }, { merge: true });
+
+  const createScheduleException = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const validation = validateScheduleException({
+      type: form.get('type'),
+      label: form.get('label'),
+      startDate: form.get('startDate'),
+      endDate: form.get('endDate'),
+      workDays: Number(form.get('workDays')),
+      restDays: Number(form.get('restDays')),
+      cycleStartDate: form.get('cycleStartDate'),
+    }, scheduleExceptions);
+    if (!validation.valid) {
+      showToast(validation.error);
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), {
+        ...validation.exception,
+        createdAt: serverTimestamp(),
+      });
+      formElement.reset();
+      setExceptionType('vacation');
+      setShowExceptionForm(false);
+      showToast('Cambio temporal aplicado al calendario.');
+    } catch (error) {
+      console.error('No se pudo guardar el cambio temporal.', error);
+      showToast('No se pudo guardar el cambio de roster.');
+    }
+  };
+
+  const createRestTask = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const title = String(form.get('title') || '').trim().slice(0, 100);
+    if (!title) return;
+    try {
+      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), {
+        title,
+        date: String(form.get('date') || ''),
+        category: String(form.get('category') || 'personal'),
+        priority: String(form.get('priority') || 'medium'),
+        estimatedMinutes: Math.max(0, Number(form.get('estimatedMinutes') || 0)),
+        completed: false,
+        createdAt: serverTimestamp(),
+      });
+      formElement.reset();
+      showToast('Plan agregado a tu próximo franco.');
+    } catch (error) {
+      console.error('No se pudo crear la tarea.', error);
+      showToast('No se pudo agregar el plan.');
+    }
+  };
+
+  const saveFinancePlan = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const plan = {
+      monthlyIncome: Math.max(0, Number(form.get('monthlyIncome') || 0)),
+      fixedCosts: Math.max(0, Number(form.get('fixedCosts') || 0)),
+      plannedSavings: Math.max(0, Number(form.get('plannedSavings') || 0)),
+      currency: String(form.get('currency') || 'ARS'),
+      updatedAt: serverTimestamp(),
+    };
+    if (plan.fixedCosts + plan.plannedSavings > plan.monthlyIncome && plan.monthlyIncome > 0) {
+      showToast('Los gastos fijos y el ahorro superan el ingreso mensual.');
+      return;
+    }
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'finance'), plan, { merge: true });
+    showToast('Presupuesto mensual actualizado.');
+  };
+
+  const addExpense = async (event) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const amount = Number(form.get('amount'));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast('Ingresa un gasto mayor que cero.');
+      return;
+    }
+    await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), {
+      amount,
+      category: String(form.get('category') || 'otros'),
+      note: String(form.get('note') || '').trim().slice(0, 80),
+      date: String(form.get('date') || getTodayDate()),
+      createdAt: serverTimestamp(),
+    });
+    formElement.reset();
+    showToast('Gasto registrado.');
+  };
+
+  const toggleAnalytics = async () => {
+    const nextValue = !privacySettings.analyticsEnabled;
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'privacy'), {
+      analyticsEnabled: nextValue,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    if (!nextValue) {
+      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid));
+    }
+    showToast(nextValue ? 'Métricas anónimas activadas.' : 'Métricas anónimas desactivadas.');
+  };
+
   const createFinancialGoal = async (event) => {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -1059,6 +1297,7 @@ export default function App() {
               <div className="relative z-10">
                 <div className="flex items-baseline space-x-2"><span className="text-6xl font-black">{currentStatus?.actualDay || 0}</span><span className={`text-xl font-medium ${textMuted}`}>/ {currentStatus?.totalPhaseDays || 0}</span></div>
                 <p className={`mt-1 text-sm ${textMuted}`}>Días {currentStatus?.isWorking ? 'trabajados' : 'descansados'} del ciclo.</p>
+                {currentStatus?.isOverride && <p className="mt-2 inline-flex items-center rounded-full bg-indigo-500/15 px-3 py-1 text-[10px] font-bold text-indigo-400"><CalendarRange size={12} className="mr-1.5"/>{currentStatus.exceptionLabel || EXCEPTION_LABELS[currentStatus.exceptionType]}</p>}
               </div>
               <div className={`mt-6 h-2.5 w-full rounded-full overflow-hidden ${theme === 'light' ? 'bg-slate-200' : 'bg-slate-800/50'}`}>
                 <div className={`h-full rounded-full transition-all duration-1000 ${currentStatus?.isWorking ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${((currentStatus?.actualDay || 0) / (currentStatus?.totalPhaseDays || 1)) * 100}%` }}></div>
@@ -1080,16 +1319,50 @@ export default function App() {
               </div>
             )}
 
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div><h3 className="font-bold flex items-center"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después vuelves automáticamente a tu diagrama habitual.</p></div>
+                <button type="button" onClick={() => setShowExceptionForm((value) => !value)} className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-bold text-white">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
+              </div>
+
+              {showExceptionForm && (
+                <form onSubmit={createScheduleException} className={`mt-4 space-y-3 rounded-xl border p-4 ${theme === 'light' ? 'bg-indigo-50/60 border-indigo-100' : 'bg-indigo-500/5 border-indigo-500/20'}`}>
+                  <select name="type" value={exceptionType} onChange={(event) => setExceptionType(event.target.value)} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}>
+                    {Object.keys(SCHEDULE_EXCEPTION_TYPES).map((type) => <option key={type} value={type}>{EXCEPTION_LABELS[type]}</option>)}
+                  </select>
+                  <input name="label" type="text" maxLength="80" placeholder="Nota privada opcional" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}/>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className={`text-[10px] font-bold ${textMuted}`}>Desde<input name="startDate" type="date" defaultValue={getTodayDate()} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label>
+                    <label className={`text-[10px] font-bold ${textMuted}`}>Hasta<input name="endDate" type="date" defaultValue={addDaysToDate(getTodayDate(), 6)} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label>
+                  </div>
+                  {exceptionType === 'special_roster' && <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><input name="workDays" type="number" min="1" max="365" defaultValue="7" aria-label="Días de trabajo especiales" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="restDays" type="number" min="1" max="365" defaultValue="7" aria-label="Días de descanso especiales" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></div><label className={`block text-[10px] font-bold ${textMuted}`}>Primera subida del roster especial<input name="cycleStartDate" type="date" defaultValue={getTodayDate()} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label></div>}
+                  <button className="w-full rounded-xl bg-indigo-500 py-2.5 text-sm font-bold text-white">Aplicar cambio temporal</button>
+                </form>
+              )}
+
+              {scheduleExceptions.length === 0 ? <p className={`mt-4 text-xs text-center py-2 ${textMuted}`}>Tu roster sigue el diagrama habitual, sin cambios cargados.</p> : (
+                <div className="mt-4 space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {scheduleExceptions.map((exception) => (
+                    <div key={exception.id} className={`rounded-xl border p-3 flex items-center gap-3 ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
+                      <div className="h-9 w-9 flex-shrink-0 rounded-lg bg-indigo-500/15 text-indigo-500 flex items-center justify-center"><ScheduleExceptionIcon type={exception.type}/></div>
+                      <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{exception.label || EXCEPTION_LABELS[exception.type]}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(exception.startDate)} — {formatShortDate(exception.endDate)}{exception.type === 'special_roster' ? ` · ${exception.workDays}x${exception.restDays}` : ''}</p></div>
+                      <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', exception.id))} className="p-2 text-slate-400 hover:text-red-400" aria-label={`Eliminar ${EXCEPTION_LABELS[exception.type]}`}><Trash2 size={15}/></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {/* MOTOR DE ANUNCIOS SMART */}
             {shouldShowAd && (
-              <div className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 overflow-hidden relative animate-in fade-in slide-in-from-top-4">
+              <div ref={adContainerRef} className="bg-gradient-to-r from-blue-900 to-indigo-900 border border-blue-500/30 rounded-2xl p-4 flex items-center justify-between shadow-lg shadow-blue-900/20 overflow-hidden relative animate-in fade-in slide-in-from-top-4">
                  <div className="relative z-10 min-w-0">
                    <p className="text-[10px] uppercase font-black text-amber-400 mb-1 flex items-center"><Megaphone size={10} className="mr-1"/> Contenido patrocinado</p>
                    <p className="font-bold text-white text-sm">{currentAd.title}</p>
                    <p className="text-xs text-blue-200 mt-0.5">{currentAd.company}</p>
                  </div>
                  {currentAd.url && (
-                   <a href={currentAd.url} target="_blank" rel="noopener noreferrer sponsored" className="ml-3 flex-shrink-0 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl px-3 py-2 text-xs font-bold relative z-10 flex items-center">{currentAd.cta || 'Ver oferta'}<ExternalLink size={12} className="ml-1.5"/></a>
+                   <a href={currentAd.url} target="_blank" rel="noopener noreferrer sponsored" onClick={() => privacySettings.analyticsEnabled && trackCampaignMetric(user, currentAd.id, 'click').catch((error) => console.error('No se pudo registrar el clic.', error))} className="ml-3 flex-shrink-0 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl px-3 py-2 text-xs font-bold relative z-10 flex items-center">{currentAd.cta || 'Ver oferta'}<ExternalLink size={12} className="ml-1.5"/></a>
                  )}
               </div>
             )}
@@ -1206,14 +1479,15 @@ export default function App() {
                 <span className={`text-[10px] font-bold ${textMuted}`}>120 días</span>
               </div>
               <p className={`text-[11px] mb-4 ${textMuted}`}>Calculados automáticamente con los diagramas disponibles.</p>
-              {upcomingCoincidences.length > 0 ? (
+              {groupedCoincidences.length > 0 ? (
                 <div className="space-y-2">
-                  {upcomingCoincidences.map((window) => (
-                    <div key={`${window.friendId}-${window.startDate}`} className={`rounded-xl border p-3 flex items-center justify-between ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
-                      <div className="min-w-0"><p className="font-bold text-sm truncate">{window.friendName}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(window.startDate)}{window.endDate !== window.startDate ? ` — ${formatShortDate(window.endDate)}` : ''}</p></div>
-                      <span className="text-xs font-black text-emerald-500 whitespace-nowrap ml-3">{window.days} {window.days === 1 ? 'día' : 'días'}</span>
+                  {visibleCoincidences.map((window) => (
+                    <div key={`${window.startDate}-${window.endDate}`} className={`rounded-xl border p-3 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+                      <div className="flex items-center justify-between gap-3"><p className="font-bold text-sm">{formatShortDate(window.startDate)}{window.endDate !== window.startDate ? ` — ${formatShortDate(window.endDate)}` : ''}</p><span className="text-xs font-black text-emerald-500 whitespace-nowrap">{window.days} {window.days === 1 ? 'día' : 'días'}</span></div>
+                      <div className="flex flex-wrap gap-1.5 mt-2">{window.friends.map((friend) => <span key={friend.id} className={`text-[10px] font-bold px-2 py-1 rounded-full ${theme === 'light' ? 'bg-white text-emerald-700' : 'bg-slate-950/40 text-emerald-300'}`}>{friend.name}</span>)}</div>
                     </div>
                   ))}
+                  {groupedCoincidences.length > 3 && <button type="button" onClick={() => setShowAllCoincidences((value) => !value)} className={`w-full py-2 text-xs font-bold flex items-center justify-center ${textMuted}`}>{showAllCoincidences ? <ChevronUp size={14} className="mr-1"/> : <ChevronDown size={14} className="mr-1"/>}{showAllCoincidences ? 'Ver menos fechas' : `Ver ${groupedCoincidences.length - 3} fechas más`}</button>}
                 </div>
               ) : (
                 <div className={`rounded-xl p-4 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}>
@@ -1251,13 +1525,19 @@ export default function App() {
             </div>
             
             {displayFriends.length > 0 && (
-              <div className="space-y-2">
-                {displayFriends.map(friend => (
+              <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`}>
+                <div className="flex items-center justify-between gap-3 mb-3"><div><h3 className="font-bold">Mi equipo</h3><p className={`text-[10px] ${textMuted}`}>{displayFriends.length} {displayFriends.length === 1 ? 'compañero' : 'compañeros'} vinculados</p></div><Filter size={17} className="text-blue-500"/></div>
+                {displayFriends.length > 6 && <div className="relative mb-3"><Search size={15} className={`absolute left-3 top-2.5 ${textMuted}`}/><input value={crewSearch} onChange={(event) => setCrewSearch(event.target.value)} placeholder="Buscar compañero…" className={`w-full rounded-xl pl-9 pr-3 py-2 text-sm outline-none border ${inputBg}`}/></div>}
+                <div className="space-y-2 max-h-[26rem] overflow-y-auto pr-1">
+                {visibleFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
                     <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p></div>
                     <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id))} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
                   </div>
                 ))}
+                {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
+                </div>
+                {filteredFriends.length > 6 && <button type="button" onClick={() => setShowAllFriends((value) => !value)} className="w-full mt-3 rounded-xl border border-blue-500/20 py-2.5 text-xs font-bold text-blue-500 flex items-center justify-center">{showAllFriends ? <ChevronUp size={14} className="mr-1"/> : <ChevronDown size={14} className="mr-1"/>}{showAllFriends ? 'Mostrar solo 6' : `Mostrar los ${filteredFriends.length}`}</button>}
               </div>
             )}
           </div>
@@ -1266,20 +1546,38 @@ export default function App() {
         {/* TAB 3: PLANNER */}
         {activeTab === 'planner' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <div className="mb-6">
-               <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" theme={theme} />
+            <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" theme={theme} />
+
+            <div className="rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 p-5 text-white shadow-xl shadow-emerald-900/20 relative overflow-hidden">
+              <div className="absolute -right-6 -bottom-8 opacity-10"><Umbrella size={120}/></div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-100">Próximo descanso</p>
+              {!nextRestWindow ? <p className="font-bold mt-2">Configura primero tu diagrama.</p> : <><p className="text-2xl font-black mt-1">{formatShortDate(nextRestWindow.startDate)} — {formatShortDate(nextRestWindow.endDate)}</p><p className="text-sm text-emerald-100">{nextRestWindow.days} {nextRestWindow.days === 1 ? 'día disponible' : 'días disponibles'} para avanzar en lo importante.</p></>}
+              <div className="grid grid-cols-3 gap-2 mt-5 relative z-10"><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{taskSummary.open}</p><p className="text-[9px] uppercase">Pendientes</p></div><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{taskSummary.overdue}</p><p className="text-[9px] uppercase">Atrasados</p></div><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{Math.round(taskSummary.minutesPending / 60)}h</p><p className="text-[9px] uppercase">Planificadas</p></div></div>
             </div>
-            <form onSubmit={(e) => addGenericDoc(e, 'tasks', { title: e.target.elements.title.value, completed: false })} className="flex space-x-2">
-              <input name="title" type="text" placeholder="Ej. Turno médico..." className={`flex-1 rounded-xl px-4 py-3 outline-none border shadow-sm ${inputBg}`} required/>
-              <button type="submit" className="bg-emerald-500 hover:bg-emerald-400 text-white p-3 rounded-xl shadow-lg shadow-emerald-500/20 active:scale-95"><Plus size={24}/></button>
+
+            <form onSubmit={createRestTask} className={`rounded-2xl border p-5 space-y-3 ${cardClasses[theme]}`}>
+              <div><h3 className="font-bold">Agregar un plan</h3><p className={`text-[10px] ${textMuted}`}>Ponle fecha, prioridad y tiempo estimado para no llenar el franco de más.</p></div>
+              <input name="title" type="text" maxLength="100" placeholder="Ej. Turno médico, renovar carnet…" className={`w-full rounded-xl px-4 py-3 outline-none border ${inputBg}`} required/>
+              <div className="grid grid-cols-2 gap-2">
+                <input name="date" type="date" defaultValue={nextRestWindow?.startDate || getTodayDate()} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/>
+                <select name="category" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}>{Object.entries(TASK_CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                <select name="priority" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="high">Prioridad alta</option><option value="medium">Prioridad media</option><option value="low">Prioridad baja</option></select>
+                <select name="estimatedMinutes" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="240">4 horas</option><option value="480">1 día</option></select>
+              </div>
+              <button className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-white shadow-lg shadow-emerald-500/20"><Plus size={17} className="inline mr-1"/> Agregar al franco</button>
             </form>
-            <div className="space-y-3">
-              {tasks.map(task => (
-                <div key={task.id} className={`flex items-center justify-between p-4 rounded-xl border group transition-all ${task.completed ? 'opacity-60' : ''} ${cardClasses[theme]}`}>
-                  <div className="flex items-center space-x-3 overflow-hidden cursor-pointer flex-1" onClick={() => toggleTask(task)}><div className={`flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-colors ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white" />}</div><span className={`truncate font-medium transition-all ${task.completed ? 'line-through opacity-50' : ''}`}>{task.title}</span></div>
-                  <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id))} className="text-slate-400 hover:text-red-400 p-2 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
-                </div>
-              ))}
+
+            <div>
+              <div className="flex gap-2 mb-3">{[['open', 'Pendientes'], ['done', 'Hechos'], ['all', 'Todos']].map(([value, label]) => <button key={value} type="button" onClick={() => setTaskFilter(value)} className={`rounded-full px-3 py-1.5 text-xs font-bold border ${taskFilter === value ? 'bg-emerald-500 border-emerald-500 text-white' : inputBg}`}>{label}</button>)}</div>
+              <div className="space-y-3">
+                {visibleTasks.length === 0 && <div className={`rounded-2xl border p-6 text-center ${cardClasses[theme]}`}><CheckCircle2 size={28} className="mx-auto text-emerald-500 mb-2"/><p className="font-bold">Nada pendiente en esta vista</p><p className={`text-xs mt-1 ${textMuted}`}>Tu franco queda libre para descansar o agregar un objetivo.</p></div>}
+                {visibleTasks.map(task => (
+                  <div key={task.id} className={`rounded-2xl border p-4 transition-all ${task.completed ? 'opacity-60' : ''} ${cardClasses[theme]}`}>
+                    <div className="flex items-start gap-3"><button type="button" onClick={() => toggleTask(task)} className={`mt-0.5 flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white"/>}</button><div className="min-w-0 flex-1"><p className={`font-bold ${task.completed ? 'line-through' : ''}`}>{task.title}</p><div className={`flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1 ${textMuted}`}><span><Calendar size={11} className="inline mr-1"/>{task.date ? formatShortDate(task.date) : 'Sin fecha'}</span><span>{TASK_CATEGORY_LABELS[task.category] || 'Personal'}</span>{Number(task.estimatedMinutes) > 0 && <span><Clock size={11} className="inline mr-1"/>{task.estimatedMinutes} min</span>}</div></div><button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id))} className="p-2 text-slate-400 hover:text-red-400" aria-label={`Eliminar ${task.title}`}><Trash2 size={16}/></button></div>
+                    {!task.completed && task.priority === 'high' && <span className="mt-3 inline-block rounded-full bg-red-500/10 px-2 py-1 text-[9px] font-black uppercase text-red-400">Prioridad alta</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -1287,19 +1585,27 @@ export default function App() {
         {/* TAB 4: WEALTH */}
         {activeTab === 'wealth' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <div className="flex justify-between items-center mb-6">
-              <HeaderTitle icon={TrendingUp} title="Finanzas" colorClass="text-emerald-500" theme={theme} />
-              <button onClick={() => setPremiumView(!premiumView)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors flex items-center ${premiumView ? 'bg-indigo-500 text-white border-indigo-500 shadow-lg shadow-indigo-500/30' : (theme === 'light' ? 'bg-white text-indigo-500 border-indigo-200' : 'bg-slate-900 text-indigo-400 border-indigo-500/30')}`}>
-                 {premiumView ? <Target size={14} className="mr-1"/> : <LineChart size={14} className="mr-1"/>} {premiumView ? 'Ver mis metas' : 'Ver mercados'}
-               </button>
+            <HeaderTitle icon={TrendingUp} title="Finanzas" colorClass="text-emerald-500" theme={theme} />
+
+            <div className="rounded-3xl bg-gradient-to-br from-slate-900 to-emerald-950 border border-emerald-500/30 p-5 text-white shadow-xl relative overflow-hidden">
+              <div className="absolute -right-5 -top-4 opacity-10"><WalletCards size={110}/></div>
+              <p className="text-[10px] uppercase font-black tracking-widest text-emerald-300">Disponible este mes</p><p className={`text-3xl font-black mt-1 ${budgetSummary.remaining < 0 ? 'text-red-400' : 'text-white'}`}>{formatAmount(budgetSummary.remaining, financeSettings.currency)}</p>
+              <div className="grid grid-cols-3 gap-2 mt-5 relative z-10"><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Ahorrás</p><p className="font-black">{budgetSummary.savingsRate.toFixed(0)}%</p></div><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Gastos</p><p className="font-black truncate">{formatAmount(budgetSummary.variableSpent, financeSettings.currency)}</p></div><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Por día franco</p><p className="font-black truncate">{formatAmount(budgetSummary.dailyRestBudget, financeSettings.currency)}</p></div></div>
             </div>
 
-            <div className={`rounded-xl border px-4 py-3 text-[10px] leading-relaxed ${theme === 'light' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-amber-500/10 border-amber-500/20 text-amber-200'}`}>
-              Las cotizaciones son informativas y pueden estar demoradas. RosterMax no reemplaza asesoramiento financiero profesional ni recomienda inversiones específicas.
+            <form onSubmit={saveFinancePlan} className={`rounded-2xl border p-5 space-y-3 ${cardClasses[theme]}`}>
+              <div><h3 className="font-bold flex items-center"><PiggyBank size={18} className="mr-2 text-emerald-500"/> Plan mensual</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Separa primero gastos fijos y ahorro; RosterMax calcula cuánto queda para tus días de descanso.</p></div>
+              <div className="grid grid-cols-2 gap-2"><input name="monthlyIncome" type="number" min="0" step="0.01" defaultValue={financeSettings.monthlyIncome} placeholder="Ingreso mensual" aria-label="Ingreso mensual" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><select name="currency" defaultValue={financeSettings.currency} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólares (USD)</option></select><input name="fixedCosts" type="number" min="0" step="0.01" defaultValue={financeSettings.fixedCosts} placeholder="Gastos fijos" aria-label="Gastos fijos" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="plannedSavings" type="number" min="0" step="0.01" defaultValue={financeSettings.plannedSavings} placeholder="Ahorro mensual" aria-label="Ahorro mensual" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></div>
+              <button className="w-full rounded-xl bg-emerald-500 py-2.5 text-sm font-bold text-white">Guardar presupuesto</button>
+            </form>
+
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <h3 className="font-bold flex items-center"><Receipt size={18} className="mr-2 text-blue-500"/> Gastos del mes</h3>
+              <form onSubmit={addExpense} className="mt-3 space-y-2"><div className="grid grid-cols-2 gap-2"><input name="amount" type="number" min="0.01" step="0.01" placeholder="Monto" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><select name="category" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="comida">Comida</option><option value="transporte">Transporte</option><option value="familia">Familia</option><option value="ocio">Ocio</option><option value="otros">Otros</option></select><input name="date" type="date" defaultValue={getTodayDate()} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="note" type="text" maxLength="80" placeholder="Nota opcional" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}/></div><button className="w-full rounded-xl border border-blue-500/30 py-2 text-xs font-bold text-blue-500">Registrar gasto</button></form>
+              {expenses.length > 0 && <div className="mt-4 space-y-2 max-h-48 overflow-y-auto pr-1">{expenses.slice(0, 10).map((expense) => <div key={expense.id} className={`flex items-center justify-between rounded-xl p-3 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div className="min-w-0"><p className="text-xs font-bold truncate">{expense.note || expense.category}</p><p className={`text-[9px] ${textMuted}`}>{formatShortDate(expense.date)} · {expense.category}</p></div><div className="flex items-center gap-2"><span className="text-xs font-black text-red-400">− {formatAmount(expense.amount, financeSettings.currency)}</span><button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses', expense.id))} className="text-slate-400 hover:text-red-400"><X size={14}/></button></div></div>)}</div>}
             </div>
 
-            {!premiumView ? (
-              <div className="space-y-6 animate-in fade-in">
+            <div className="space-y-4"><h3 className="font-bold flex items-center"><Target size={18} className="mr-2 text-indigo-500"/> Metas de ahorro</h3>
                 <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
                   <form onSubmit={createFinancialGoal} className="space-y-3">
                     <div className="flex space-x-2">
@@ -1346,52 +1652,7 @@ export default function App() {
                   })}
                 </div>
               </div>
-            ) : (
-              <div className="space-y-4 animate-in slide-in-from-left-4">
-                 <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-2xl p-5 text-white shadow-xl border border-indigo-500/30 relative overflow-hidden">
-                    <div className="absolute right-0 top-0 opacity-10"><TrendingUp size={100} /></div>
-                    <h3 className="font-black text-lg mb-1 flex items-center"><LineChart size={18} className="mr-2 text-indigo-400"/> Mercado USA (Wall Street)</h3>
-                    <p className="text-[10px] text-indigo-200 mb-4 opacity-80">Datos aproximados (Yahoo Finance).</p>
-                    <div className="space-y-3 relative z-10">
-                      <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10 flex justify-between items-center">
-                        <div><p className="font-bold text-sm">S&P 500 (SPY)</p><p className="text-[10px] text-indigo-300">Las 500 empresas top</p></div>
-                        <div className="text-right">
-                          <p className="font-black">${marketData.SPY.price}</p>
-                          <p className={`text-[10px] font-bold ${marketData.SPY.isUp ? 'text-emerald-400' : 'text-red-400'}`}>{marketData.SPY.change}</p>
-                        </div>
-                      </div>
-                      <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10 flex justify-between items-center">
-                        <div><p className="font-bold text-sm">Energía (XLE)</p><p className="text-[10px] text-indigo-300">Sector Petrolero Global</p></div>
-                        <div className="text-right">
-                          <p className="font-black">${marketData.XLE.price}</p>
-                          <p className={`text-[10px] font-bold ${marketData.XLE.isUp ? 'text-emerald-400' : 'text-red-400'}`}>{marketData.XLE.change}</p>
-                        </div>
-                      </div>
-                    </div>
-                 </div>
-
-                 <div className="bg-gradient-to-br from-cyan-900 to-slate-900 rounded-2xl p-5 text-white shadow-xl border border-cyan-500/30 relative overflow-hidden">
-                    <h3 className="font-black text-lg mb-1 flex items-center"><Globe size={18} className="mr-2 text-cyan-400"/> Mercado Argentino (ADRs)</h3>
-                    <p className="text-[10px] text-cyan-200 mb-4 opacity-80">Cotizaciones en USD.</p>
-                    <div className="space-y-3 relative z-10">
-                      <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10 flex justify-between items-center">
-                        <div><p className="font-bold text-sm">YPF S.A. (YPF)</p><p className="text-[10px] text-cyan-300">Petróleo y Gas Estatal</p></div>
-                        <div className="text-right">
-                          <p className="font-black">${marketData.YPF.price}</p>
-                          <p className={`text-[10px] font-bold ${marketData.YPF.isUp ? 'text-emerald-400' : 'text-red-400'}`}>{marketData.YPF.change}</p>
-                        </div>
-                      </div>
-                      <div className="bg-white/5 backdrop-blur-md rounded-xl p-3 border border-white/10 flex justify-between items-center">
-                        <div><p className="font-bold text-sm">Pampa Energía (PAM)</p><p className="text-[10px] text-cyan-300">Generación y Gas</p></div>
-                        <div className="text-right">
-                          <p className="font-black">${marketData.PAM.price}</p>
-                          <p className={`text-[10px] font-bold ${marketData.PAM.isUp ? 'text-emerald-400' : 'text-red-400'}`}>{marketData.PAM.change}</p>
-                        </div>
-                      </div>
-                    </div>
-                 </div>
-              </div>
-            )}
+            <div className={`rounded-xl border px-4 py-3 text-[10px] leading-relaxed ${theme === 'light' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-amber-500/10 border-amber-500/20 text-amber-200'}`}>RosterMax te ayuda a ordenar tu presupuesto y tus metas. No brinda recomendaciones de inversión ni reemplaza asesoramiento financiero profesional.</div>
           </div>
         )}
 
@@ -1469,6 +1730,11 @@ export default function App() {
                   <button type="button" onClick={requestTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold bg-emerald-500 text-white">Activar</button>
                 )}
               </div>
+            </div>
+
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className={`h-10 w-10 rounded-xl flex-shrink-0 flex items-center justify-center ${privacySettings.analyticsEnabled ? 'bg-blue-500/15 text-blue-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}><Activity size={19}/></div><div><h3 className="font-bold text-sm">Ayudar a mejorar RosterMax</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Comparte métricas técnicas y agregadas de uso. Nunca enviamos nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.</p></div></div><button type="button" role="switch" aria-checked={privacySettings.analyticsEnabled} onClick={toggleAnalytics} className={`w-12 h-7 rounded-full p-1 flex-shrink-0 transition-colors ${privacySettings.analyticsEnabled ? 'bg-blue-500 justify-end' : 'bg-slate-600 justify-start'}`}><span className="block h-5 w-5 rounded-full bg-white shadow"/></button></div>
+              <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Puedes apagarlo cuando quieras y eliminaremos tu registro de medición.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
             </div>
 
             <button type="button" onClick={reopenOnboarding} className={`w-full rounded-2xl border p-4 flex items-center justify-between text-left ${cardClasses[theme]}`}>
@@ -1580,6 +1846,17 @@ export default function App() {
               </div>
             </div>
 
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between"><div><h3 className="font-bold flex items-center"><BarChart3 size={18} className="mr-2 text-blue-500"/> Audiencia medible</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Datos propios de usuarios que aceptaron métricas. No son descargas de tienda ni incluyen información personal.</p></div><span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">OPT-IN</span></div>
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-blue-50' : 'bg-blue-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Usuarios medidos</p><p className="text-2xl font-black text-blue-500">{audienceSummary.measuredUsers}</p></div>
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-emerald-50' : 'bg-emerald-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 30 días</p><p className="text-2xl font-black text-emerald-500">{audienceSummary.activeMonth}</p></div>
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-indigo-50' : 'bg-indigo-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 7 días</p><p className="text-2xl font-black text-indigo-500">{audienceSummary.activeWeek}</p></div>
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 24 horas</p><p className="text-2xl font-black text-amber-500">{audienceSummary.activeDay}</p></div>
+              </div>
+              <div className={`grid grid-cols-3 gap-2 mt-2 text-center ${textMuted}`}><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.linkedAccounts}</p><p className="text-[8px] uppercase">Cuentas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.installsDetected}</p><p className="text-[8px] uppercase">Instaladas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.configuredRosters}</p><p className="text-[8px] uppercase">Configuradas</p></div></div>
+            </div>
+
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
               <h3 className="font-bold flex items-center mb-1 text-amber-500"><Megaphone size={18} className="mr-2"/> Nueva campaña patrocinada</h3>
               <p className={`text-[10px] mb-4 ${textMuted}`}>Para la beta, tú cargas y pausas cada campaña. La segmentación se evalúa en el dispositivo y no entrega datos del trabajador al anunciante.</p>
@@ -1603,12 +1880,14 @@ export default function App() {
               <h3 className="font-bold mb-4">Campañas</h3>
               {ads.length === 0 ? <p className={`text-xs ${textMuted}`}>Todavía no creaste campañas.</p> : (
                 <div className="space-y-3">
-                  {ads.map((ad) => (
-                    <div key={ad.id} className={`rounded-xl border p-4 ${ad.active ? 'border-emerald-500/30' : theme === 'light' ? 'border-slate-200 opacity-60' : 'border-slate-700 opacity-60'}`}>
+                  {ads.map((ad) => {
+                    const metrics = getCampaignSummary(ad.id, campaignMetrics);
+                    return <div key={ad.id} className={`rounded-xl border p-4 ${ad.active ? 'border-emerald-500/30' : theme === 'light' ? 'border-slate-200 opacity-60' : 'border-slate-700 opacity-60'}`}>
                       <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-bold truncate">{ad.title}</p><p className={`text-[10px] ${textMuted}`}>{ad.company} · {ad.location}</p><p className={`text-[10px] mt-1 ${textMuted}`}>{ad.startDate || 'Sin fecha'} — {ad.endDate || 'Sin fecha'}</p></div><span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${ad.active ? 'bg-emerald-500/15 text-emerald-500' : 'bg-slate-500/15 text-slate-500'}`}>{ad.active ? 'Activa' : 'Pausada'}</span></div>
+                      <div className={`grid grid-cols-4 gap-1 mt-3 rounded-xl p-2 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div><p className="text-xs font-black">{metrics.reach}</p><p className={`text-[8px] ${textMuted}`}>Alcance</p></div><div><p className="text-xs font-black">{metrics.impressions}</p><p className={`text-[8px] ${textMuted}`}>Vistas</p></div><div><p className="text-xs font-black">{metrics.clicks}</p><p className={`text-[8px] ${textMuted}`}>Clics</p></div><div><p className="text-xs font-black">{metrics.ctr.toFixed(1)}%</p><p className={`text-[8px] ${textMuted}`}>CTR</p></div></div>
                       {ad.active && <button type="button" onClick={() => pauseAd(ad.id)} className="mt-3 w-full rounded-lg border border-red-500/20 text-red-400 py-2 text-xs font-bold flex items-center justify-center"><PauseCircle size={14} className="mr-1.5"/> Pausar campaña</button>}
-                    </div>
-                  ))}
+                    </div>;
+                  })}
                 </div>
               )}
             </div>

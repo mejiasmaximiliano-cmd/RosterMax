@@ -50,3 +50,17 @@ Los comentarios enviados por participantes se guardan en:
 `artifacts/roster-max-production/public/data/feedback/{feedbackId}`
 
 No existe una lista pública de comentarios: solamente el remitente puede crearlos y el administrador puede leerlos.
+
+## Métricas con consentimiento
+
+La actividad técnica aceptada por cada participante se guarda en:
+
+`artifacts/roster-max-production/public/data/activity/{uid}`
+
+Cada usuario puede leer y borrar sólo su propio registro. El administrador puede listar estos documentos para construir cantidades agregadas; no contienen nombre, correo, empresa, ubicación ni contenido de la app.
+
+Las vistas y clics de campañas se acumulan por usuario y campaña en:
+
+`artifacts/roster-max-production/public/data/campaign_metrics/{campaignId}_{uid}`
+
+Las reglas impiden falsificar la identidad, cambiar de campaña o aumentar un contador en más de una unidad por evento. Sólo el administrador puede listar el conjunto para calcular alcance, impresiones, clics y CTR.

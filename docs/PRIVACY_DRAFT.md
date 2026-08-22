@@ -16,15 +16,17 @@ RosterMax puede almacenar:
 - nombre visible elegido por el usuario;
 - configuración del roster y fecha de inicio de ciclo;
 - empresa, sector, yacimiento, transporte y provincias indicadas;
-- tareas, bitácoras y metas financieras creadas por el usuario;
+- cambios temporales del roster, incluyendo el motivo privado que el usuario escriba;
+- tareas, bitácoras, presupuesto, gastos y metas financieras creadas por el usuario;
 - compañeros agregados y códigos de sincronización;
 - localidad y coordenadas elegidas para consultar el clima.
 - preferencia para alertas de cambios de turno.
-- categoría y mensaje de los comentarios enviados durante la beta.
+- categoría y mensaje de los comentarios enviados durante la beta;
+- si el usuario lo activa, métricas técnicas de actividad, tipo de cuenta, instalación detectada, configuración inicial completada e interacción agregada con campañas.
 
 ## Finalidades
 
-Los datos se usan para calcular el roster, sincronizar la información que el usuario decide compartir, respaldar sus datos, mostrar el clima elegido, operar las funciones de planificación y responder a comentarios de la beta.
+Los datos se usan para calcular el roster y sus cambios temporales, sincronizar la información que el usuario decide compartir, respaldar sus datos, mostrar el clima elegido, operar las funciones de planificación y finanzas, medir campañas con consentimiento y responder a comentarios de la beta.
 
 ## Sincronización con compañeros
 
@@ -33,6 +35,7 @@ RosterMax no publica un directorio de trabajadores. Al compartir un código, otr
 - nombre visible;
 - días de trabajo y descanso;
 - fecha de inicio del ciclo.
+- tipo y fechas de cambios temporales que alteran la disponibilidad; el motivo o nota privada no se comparte.
 
 No se incluyen correo, empresa, provincias, tareas, metas ni bitácoras.
 
@@ -48,7 +51,13 @@ Las alertas del sistema se activan únicamente después de que el usuario conced
 - Open-Meteo recibe las coordenadas seleccionadas para responder consultas climáticas.
 - Vercel aloja y distribuye la aplicación web.
 
-Antes de incorporar pagos, analítica o nuevos proveedores, esta política debe actualizarse.
+Antes de incorporar pagos o nuevos proveedores, esta política debe actualizarse.
+
+## Métricas opcionales
+
+La medición está desactivada por defecto. Si el usuario la activa, RosterMax registra un identificador técnico, actividad reciente, tipo de cuenta, detección de instalación, configuración del roster e interacciones con campañas. No incluye nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.
+
+El panel administrativo presenta cantidades agregadas de usuarios activos, alcance, impresiones, clics y CTR. Al desactivar la medición, la aplicación elimina el registro técnico de actividad del usuario; los contadores históricos de campañas pueden conservarse de forma agregada para informes comerciales.
 
 ## Publicidad
 

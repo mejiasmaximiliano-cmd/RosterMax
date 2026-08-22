@@ -45,3 +45,22 @@ export function findRestCoincidences(startDate, ownConfig, friends, options = {}
     .sort((left, right) => left.startDate.localeCompare(right.startDate) || right.days - left.days)
     .slice(0, maxResults);
 }
+
+export function groupCoincidenceWindows(windows) {
+  const groups = new Map();
+  for (const window of windows || []) {
+    const key = `${window.startDate}:${window.endDate}`;
+    const current = groups.get(key) || {
+      startDate: window.startDate,
+      endDate: window.endDate,
+      days: window.days,
+      friends: [],
+    };
+    if (!current.friends.some((friend) => friend.id === window.friendId)) {
+      current.friends.push({ id: window.friendId, name: window.friendName });
+    }
+    groups.set(key, current);
+  }
+  return Array.from(groups.values())
+    .sort((left, right) => left.startDate.localeCompare(right.startDate) || right.friends.length - left.friends.length);
+}

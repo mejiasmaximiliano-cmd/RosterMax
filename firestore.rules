@@ -22,7 +22,7 @@ service cloud.firestore {
 
     function validSharedRoster(data, code) {
       return data.keys().hasOnly([
-          'ownerUid', 'syncCode', 'name', 'workDays', 'restDays', 'startDate', 'updatedAt'
+          'ownerUid', 'syncCode', 'name', 'workDays', 'restDays', 'startDate', 'exceptions', 'updatedAt'
         ])
         && data.ownerUid == request.auth.uid
         && data.syncCode == code
@@ -37,7 +37,39 @@ service cloud.firestore {
         && data.restDays <= 365
         && data.startDate is string
         && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && (!data.keys().hasAny(['exceptions']) || (data.exceptions is list && data.exceptions.size() <= 30))
         && data.updatedAt is timestamp;
+    }
+
+    function validActivity(data, userId) {
+      return data.keys().hasOnly([
+          'ownerUid', 'accountType', 'firstSeenAt', 'lastActiveAt', 'lastActiveDay',
+          'installDetected', 'rosterConfigured', 'profileComplete', 'appVersion'
+        ])
+        && data.ownerUid == request.auth.uid
+        && userId == request.auth.uid
+        && data.accountType in ['guest', 'google']
+        && data.firstSeenAt is timestamp
+        && data.lastActiveAt is timestamp
+        && data.lastActiveDay is string && data.lastActiveDay.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.installDetected is bool
+        && data.rosterConfigured is bool
+        && data.profileComplete is bool
+        && data.appVersion is string && data.appVersion.size() <= 30;
+    }
+
+    function validCampaignMetric(data, metricId, appId) {
+      return data.keys().hasOnly([
+          'ownerUid', 'campaignId', 'views', 'clicks', 'firstViewAt', 'lastEventAt'
+        ])
+        && data.ownerUid == request.auth.uid
+        && data.campaignId is string && data.campaignId.size() > 0 && data.campaignId.size() <= 100
+        && metricId == data.campaignId + '_' + request.auth.uid
+        && data.views is int && data.views >= 0
+        && data.clicks is int && data.clicks >= 0
+        && data.firstViewAt is timestamp
+        && data.lastEventAt is timestamp
+        && exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/ads/$(data.campaignId));
     }
 
     function validAd(data) {
@@ -137,6 +169,40 @@ service cloud.firestore {
       match /public/data/feedback/{feedbackId} {
         allow create: if signedIn() && validFeedback(request.resource.data);
         allow read, update, delete: if isAdmin(appId);
+      }
+
+      // El usuario participa sólo si activa la medición. Puede consultar o
+      // borrar su propio registro; el administrador recibe únicamente datos
+      // técnicos sin nombre, correo, empresa, ubicación ni contenido privado.
+      match /public/data/activity/{userId} {
+        allow get: if owns(userId) || isAdmin(appId);
+        allow list: if isAdmin(appId);
+        allow create: if owns(userId) && validActivity(request.resource.data, userId);
+        allow update: if owns(userId)
+          && validActivity(request.resource.data, userId)
+          && request.resource.data.firstSeenAt == resource.data.firstSeenAt;
+        allow delete: if owns(userId) || isAdmin(appId);
+      }
+
+      // Una campaña guarda un documento agregado por usuario. Los contadores
+      // sólo pueden avanzar de a un evento; el panel CEO ve el agregado.
+      match /public/data/campaign_metrics/{metricId} {
+        allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
+        allow list: if isAdmin(appId);
+        allow create: if signedIn() && validCampaignMetric(request.resource.data, metricId, appId)
+          && request.resource.data.views <= 1
+          && request.resource.data.clicks <= 1;
+        allow update: if signedIn()
+          && resource.data.ownerUid == request.auth.uid
+          && validCampaignMetric(request.resource.data, metricId, appId)
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.campaignId == resource.data.campaignId
+          && request.resource.data.firstViewAt == resource.data.firstViewAt
+          && request.resource.data.views >= resource.data.views
+          && request.resource.data.views <= resource.data.views + 1
+          && request.resource.data.clicks >= resource.data.clicks
+          && request.resource.data.clicks <= resource.data.clicks + 1;
+        allow delete: if isAdmin(appId);
       }
 
       // Bloquea el registro global usado por versiones anteriores.

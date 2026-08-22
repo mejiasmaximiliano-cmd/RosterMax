@@ -16,10 +16,14 @@ La aplicación está preparada para una beta cerrada. Actualmente incorpora:
 - guía inicial para configurar el diagrama y el perfil;
 - invitaciones mediante enlace, con vista previa y confirmación explícita;
 - cálculo automático de los próximos francos compartidos;
+- coincidencias agrupadas, búsqueda y listas acotadas para equipos grandes;
+- vacaciones, carpeta médica, permisos, trabajo extra y rosters especiales sin alterar el diagrama base;
 - alertas locales configurables para cambios de turno;
-- metas financieras con aportes libres y proyección mensual.
+- planificación del franco por fecha, categoría, prioridad y tiempo disponible;
+- presupuesto mensual, registro de gastos, dinero por día de franco y metas de ahorro;
 - vinculación de una cuenta nueva y acceso separado para quienes ya tienen cuenta;
 - campañas patrocinadas por zona y fecha, administradas desde la aplicación;
+- métricas comerciales propias con consentimiento: actividad agregada, alcance, impresiones, clics y CTR;
 - comentarios privados de los participantes de la beta para el administrador.
 
 ## Desarrollo
