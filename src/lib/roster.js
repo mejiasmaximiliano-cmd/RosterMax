@@ -1,4 +1,12 @@
+import { decodeSharedExceptions, encodeSharedExceptions } from './sharedSchedule.js';
+
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+// Date-only values represent a worker's local calendar day, not a UTC instant.
+export function getLocalDate(date = new Date()) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 
 export function parseDateOnly(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -54,6 +62,16 @@ export const SCHEDULE_EXCEPTION_TYPES = {
   special_roster: { label: 'Roster especial', mode: 'cycle' },
 };
 
+const SHARED_EXCEPTION_TYPES = {
+  unavailable: { label: 'No disponible', mode: 'rest' },
+  rest_override: { label: 'Descanso especial', mode: 'rest' },
+};
+
+export function isRestAvailable(status) {
+  return Boolean(status && !status.error && status.isWorking === false
+    && !['medical', 'leave', 'unavailable'].includes(status.exceptionType));
+}
+
 export function validateScheduleException(input, existing = []) {
   const type = String(input?.type || '');
   const definition = SCHEDULE_EXCEPTION_TYPES[type];
@@ -62,12 +80,16 @@ export function validateScheduleException(input, existing = []) {
   const label = String(input?.label || definition?.label || '').trim().slice(0, 60);
 
   if (!definition) return { valid: false, error: 'Selecciona un tipo de cambio válido.' };
+  const otherExceptions = (existing || []).filter((item) => !input?.id || item.id !== input.id);
+  if (otherExceptions.length >= 30) {
+    return { valid: false, error: 'Puedes guardar hasta 30 cambios. Elimina uno anterior antes de agregar otro.' };
+  }
   if (parseDateOnly(startDate) === null || parseDateOnly(endDate) === null || startDate > endDate) {
     return { valid: false, error: 'Revisa las fechas del cambio de roster.' };
   }
 
-  const overlaps = (existing || []).some((item) => (
-    item.id !== input?.id && startDate <= item.endDate && endDate >= item.startDate
+  const overlaps = otherExceptions.some((item) => (
+    startDate <= item.endDate && endDate >= item.startDate
   ));
   if (overlaps) return { valid: false, error: 'Ya existe otro cambio de roster en esas fechas.' };
 
@@ -88,12 +110,11 @@ export function validateScheduleException(input, existing = []) {
 }
 
 export function sanitizeSharedExceptions(exceptions) {
-  return (exceptions || [])
-    .filter((item) => SCHEDULE_EXCEPTION_TYPES[item?.type] && parseDateOnly(item.startDate) !== null && parseDateOnly(item.endDate) !== null)
-    .slice(0, 30)
+  const sharedExceptions = (exceptions || [])
+    .filter((item) => SCHEDULE_EXCEPTION_TYPES[item?.type] && parseDateOnly(item.startDate) !== null && parseDateOnly(item.endDate) !== null && item.startDate <= item.endDate)
     .map((item) => {
       const shared = {
-        type: item.type,
+        type: ['medical', 'leave'].includes(item.type) ? 'unavailable' : item.type === 'vacation' ? 'rest_override' : item.type,
         mode: SCHEDULE_EXCEPTION_TYPES[item.type].mode,
         startDate: item.startDate,
         endDate: item.endDate,
@@ -105,6 +126,7 @@ export function sanitizeSharedExceptions(exceptions) {
       }
       return shared;
     });
+  return encodeSharedExceptions(sharedExceptions);
 }
 
 function getBaseStatus(targetDate, config) {
@@ -124,8 +146,10 @@ function getBaseStatus(targetDate, config) {
 }
 
 export function findScheduleException(dateStr, exceptions) {
-  return (exceptions || []).find((item) => (
-    parseDateOnly(item?.startDate) !== null
+  const decoded = (exceptions || []).flatMap((item) => typeof item === 'string' ? decodeSharedExceptions([item]) : [item]);
+  return decoded.find((item) => (
+    (SCHEDULE_EXCEPTION_TYPES[item?.type] || SHARED_EXCEPTION_TYPES[item?.type])
+    && parseDateOnly(item?.startDate) !== null
     && parseDateOnly(item?.endDate) !== null
     && item.startDate <= dateStr
     && item.endDate >= dateStr
@@ -166,7 +190,7 @@ export function getStatusForDate(dateStr, config) {
     daysUntilTransition: daysLeftInPhase,
     isOverride: true,
     exceptionType: exception.type,
-    exceptionLabel: exception.label || SCHEDULE_EXCEPTION_TYPES[exception.type]?.label || 'Cambio temporal',
+    exceptionLabel: exception.label || SCHEDULE_EXCEPTION_TYPES[exception.type]?.label || SHARED_EXCEPTION_TYPES[exception.type]?.label || 'Cambio temporal',
   };
 }
 

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, connectFirestoreEmulator } from 'firebase/firestore';
 
 const fallbackConfig = {
   apiKey: 'AIzaSyC-YDie00IPgmhE4gOda8KiSjHTew595NA',
@@ -21,6 +21,16 @@ const firebaseConfig = {
 };
 
 export const APP_ID = 'roster-max-production';
-export const firebaseApp = initializeApp(firebaseConfig);
+const useEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_EMULATORS === 'true';
+export const firebaseApp = initializeApp(useEmulators ? {
+  ...firebaseConfig, apiKey: 'demo-rostermax', projectId: 'demo-rostermax', authDomain: 'localhost',
+} : firebaseConfig);
 export const auth = getAuth(firebaseApp);
-export const db = getFirestore(firebaseApp);
+export const db = initializeFirestore(firebaseApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
+
+if (useEmulators) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9096', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8086);
+}

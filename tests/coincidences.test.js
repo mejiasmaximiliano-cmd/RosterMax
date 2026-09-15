@@ -30,3 +30,15 @@ test('agrupa compañeros que coinciden durante las mismas fechas', () => {
   assert.equal(grouped.length, 1);
   assert.deepEqual(grouped[0].friends.map((friend) => friend.name), ['Ana', 'Bruno']);
 });
+
+test('una carpeta médica propia o una ausencia privada de compañero no se ofrece como franco compartido', () => {
+  const own = { ...ownRoster, exceptions: [{ type: 'medical', mode: 'rest', startDate: '2026-01-03', endDate: '2026-01-03' }] };
+  const friend = { id: 'ana', name: 'Ana', ...ownRoster, exceptions: [{ type: 'unavailable', mode: 'rest', startDate: '2026-01-04', endDate: '2026-01-04' }] };
+  assert.deepEqual(findRestCoincidences('2026-01-01', own, [friend], { horizonDays: 4 }), []);
+});
+
+test('agrupa todos los miembros de un equipo de veinte personas sin cortar una fecha a la mitad', () => {
+  const friends = Array.from({ length: 20 }, (_, i) => ({ ...ownRoster, id: String(i), name: `Colega ${i}` }));
+  const windows = findRestCoincidences('2026-01-01', ownRoster, friends, { horizonDays: 8, maxResults: 960 });
+  assert.deepEqual(groupCoincidenceWindows(windows).map((window) => window.friends.length), [20, 20]);
+});

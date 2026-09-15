@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#020617" />
     <meta name="description" content="Organiza tu roster, tus francos y tus metas en un solo lugar." />
     <link rel="canonical" href="https://rostermax.vercel.app/" />
@@ -17,7 +17,7 @@
     <script type="module" src="/src/main.jsx"></script>
     
     <script>
-      if ('serviceWorker' in navigator) {
+      if ('serviceWorker' in navigator && !['localhost', '127.0.0.1'].includes(location.hostname)) {
         window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js').then(reg => {
             console.log('SW registrado', reg.scope);

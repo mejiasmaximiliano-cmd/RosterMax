@@ -12,12 +12,69 @@ service cloud.firestore {
 
     function isAdmin(appId) {
       return signedIn() && (
-        request.auth.token.admin == true
+        request.auth.token.get('admin', false) == true
         || (
           exists(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid))
-          && get(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid)).data.active == true
+          && get(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid)).data.get('active', false) == true
         )
       );
+    }
+
+    // El documento compartido contiene disponibilidad, nunca el motivo de
+    // una licencia, un diagnóstico ni notas privadas. Formato wire v1:
+    // N/R/W|inicio|fin o C|inicio|fin|trabajo|descanso|inicioCiclo.
+    // Tokens fijos permiten validar 30 cambios dentro del límite de expresiones.
+    function validSharedException(data) {
+      return data.matches('^([NRW][|][0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[|][0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])|C[|][0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[|][0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|][0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]))$');
+    }
+
+    function validSharedExceptions(items) {
+      let count = items.size();
+      return items is list && count <= 30
+        && (count <= 0 ? true : validSharedException(items[0]))
+        && (count <= 1 ? true : validSharedException(items[1]))
+        && (count <= 2 ? true : validSharedException(items[2]))
+        && (count <= 3 ? true : validSharedException(items[3]))
+        && (count <= 4 ? true : validSharedException(items[4]))
+        && (count <= 5 ? true : validSharedException(items[5]))
+        && (count <= 6 ? true : validSharedException(items[6]))
+        && (count <= 7 ? true : validSharedException(items[7]))
+        && (count <= 8 ? true : validSharedException(items[8]))
+        && (count <= 9 ? true : validSharedException(items[9]))
+        && (count <= 10 ? true : validSharedException(items[10]))
+        && (count <= 11 ? true : validSharedException(items[11]))
+        && (count <= 12 ? true : validSharedException(items[12]))
+        && (count <= 13 ? true : validSharedException(items[13]))
+        && (count <= 14 ? true : validSharedException(items[14]))
+        && (count <= 15 ? true : validSharedException(items[15]))
+        && (count <= 16 ? true : validSharedException(items[16]))
+        && (count <= 17 ? true : validSharedException(items[17]))
+        && (count <= 18 ? true : validSharedException(items[18]))
+        && (count <= 19 ? true : validSharedException(items[19]))
+        && (count <= 20 ? true : validSharedException(items[20]))
+        && (count <= 21 ? true : validSharedException(items[21]))
+        && (count <= 22 ? true : validSharedException(items[22]))
+        && (count <= 23 ? true : validSharedException(items[23]))
+        && (count <= 24 ? true : validSharedException(items[24]))
+        && (count <= 25 ? true : validSharedException(items[25]))
+        && (count <= 26 ? true : validSharedException(items[26]))
+        && (count <= 27 ? true : validSharedException(items[27]))
+        && (count <= 28 ? true : validSharedException(items[28]))
+        && (count <= 29 ? true : validSharedException(items[29]));
+    }
+
+    function analyticsConsent(appId) {
+      return signedIn()
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/settings/privacy).data.get('analyticsEnabled', false) == true;
+    }
+
+    // El sufijo se compara literalmente: no interpolamos UID en una regex.
+    // Así la primera transacción puede leer SU documento aún inexistente.
+    function ownsMetricId(metricId) {
+      let suffix = '_' + request.auth.uid;
+      let prefixSize = metricId.size() - suffix.size();
+      return signedIn() && prefixSize >= 1 && prefixSize <= 100
+        && metricId[prefixSize:metricId.size()] == suffix;
     }
 
     function validSharedRoster(data, code) {
@@ -26,6 +83,7 @@ service cloud.firestore {
         ])
         && data.ownerUid == request.auth.uid
         && data.syncCode == code
+        && code.matches('^RM-[A-Z0-9]{8}$')
         && data.name is string
         && data.name.size() > 0
         && data.name.size() <= 40
@@ -37,8 +95,8 @@ service cloud.firestore {
         && data.restDays <= 365
         && data.startDate is string
         && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
-        && (!data.keys().hasAny(['exceptions']) || (data.exceptions is list && data.exceptions.size() <= 30))
-        && data.updatedAt is timestamp;
+        && (!data.keys().hasAny(['exceptions']) || validSharedExceptions(data.exceptions))
+        && data.updatedAt == request.time;
     }
 
     function validActivity(data, userId) {
@@ -50,12 +108,12 @@ service cloud.firestore {
         && userId == request.auth.uid
         && data.accountType in ['guest', 'google']
         && data.firstSeenAt is timestamp
-        && data.lastActiveAt is timestamp
+        && data.lastActiveAt == request.time
         && data.lastActiveDay is string && data.lastActiveDay.matches('^\\d{4}-\\d{2}-\\d{2}$')
         && data.installDetected is bool
         && data.rosterConfigured is bool
         && data.profileComplete is bool
-        && data.appVersion is string && data.appVersion.size() <= 30;
+        && data.appVersion is string && data.appVersion.size() > 0 && data.appVersion.size() <= 30;
     }
 
     function validCampaignMetric(data, metricId, appId) {
@@ -68,8 +126,8 @@ service cloud.firestore {
         && data.views is int && data.views >= 0
         && data.clicks is int && data.clicks >= 0
         && data.firstViewAt is timestamp
-        && data.lastEventAt is timestamp
-        && exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/ads/$(data.campaignId));
+        && data.lastEventAt == request.time
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/ads/$(data.campaignId)).data.active == true;
     }
 
     function validAd(data) {
@@ -118,9 +176,10 @@ service cloud.firestore {
         && data.reciprocal == true
         && data.inviteCode is string && data.inviteCode.matches('^RM-[A-Z0-9]{8}$')
         && data.inviteCode != data.syncCode
-        && data.createdAt is timestamp
+        && data.createdAt == request.time
         && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(data.inviteCode)).data.ownerUid == userId
-        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(data.syncCode)).data.ownerUid == request.auth.uid;
+        && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(data.syncCode)).data.ownerUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/friends/$(userId)).data.friendUid == userId;
     }
 
     match /artifacts/{appId} {
@@ -135,7 +194,17 @@ service cloud.firestore {
       // en la lista del remitente. No obtiene lectura del espacio privado ni
       // puede representar a otro usuario.
       match /users/{userId}/friends/{friendId} {
-        allow create, update: if validReciprocalFriend(request.resource.data, appId, userId, friendId);
+        allow get: if signedIn() && friendId == request.auth.uid
+          && (!exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(userId)/friends/$(friendId))
+            || (resource.data.get('friendUid', '') == request.auth.uid
+              && resource.data.get('isSynced', false) == true
+              && resource.data.keys().hasOnly(['name', 'friendUid', 'syncCode', 'isSynced', 'reciprocal', 'inviteCode', 'createdAt'])));
+        allow create: if validReciprocalFriend(request.resource.data, appId, userId, friendId);
+        // Reaceptar no autoriza a reemplazar una conexión editada por su dueño.
+        allow update: if signedIn() && friendId == request.auth.uid
+          && resource.data.get('friendUid', '') == request.auth.uid
+          && resource.data.get('reciprocal', false) == true
+          && request.resource.data == resource.data;
       }
 
       // Cada usuario solo puede leer y modificar su propio espacio privado.
@@ -148,9 +217,8 @@ service cloud.firestore {
       match /public/data/sync_codes/{code} {
         allow get: if signedIn();
         allow list: if false;
-        allow create: if signedIn() && validSharedRoster(request.resource.data, code);
-        allow update: if signedIn()
-          && resource.data.ownerUid == request.auth.uid
+        allow create, update: if signedIn()
+          && (!exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(code)) || resource.data.ownerUid == request.auth.uid)
           && validSharedRoster(request.resource.data, code);
         allow delete: if signedIn()
           && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
@@ -173,12 +241,15 @@ service cloud.firestore {
 
       // El usuario participa sólo si activa la medición. Puede consultar o
       // borrar su propio registro; el administrador recibe únicamente datos
-      // técnicos sin nombre, correo, empresa, ubicación ni contenido privado.
+      // técnicos seudónimos (vinculados a UID), sin contenido privado.
       match /public/data/activity/{userId} {
         allow get: if owns(userId) || isAdmin(appId);
         allow list: if isAdmin(appId);
-        allow create: if owns(userId) && validActivity(request.resource.data, userId);
+        allow create: if owns(userId) && analyticsConsent(appId)
+          && validActivity(request.resource.data, userId)
+          && request.resource.data.firstSeenAt == request.time;
         allow update: if owns(userId)
+          && analyticsConsent(appId)
           && validActivity(request.resource.data, userId)
           && request.resource.data.firstSeenAt == resource.data.firstSeenAt;
         allow delete: if owns(userId) || isAdmin(appId);
@@ -187,12 +258,16 @@ service cloud.firestore {
       // Una campaña guarda un documento agregado por usuario. Los contadores
       // sólo pueden avanzar de a un evento; el panel CEO ve el agregado.
       match /public/data/campaign_metrics/{metricId} {
-        allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
+        allow get: if signedIn() && (isAdmin(appId)
+          || (!exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/campaign_metrics/$(metricId)) && ownsMetricId(metricId))
+          || (exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/campaign_metrics/$(metricId)) && resource.data.ownerUid == request.auth.uid));
         allow list: if isAdmin(appId);
-        allow create: if signedIn() && validCampaignMetric(request.resource.data, metricId, appId)
-          && request.resource.data.views <= 1
-          && request.resource.data.clicks <= 1;
+        allow create: if signedIn() && analyticsConsent(appId)
+          && validCampaignMetric(request.resource.data, metricId, appId)
+          && request.resource.data.firstViewAt == request.time
+          && request.resource.data.views + request.resource.data.clicks == 1;
         allow update: if signedIn()
+          && analyticsConsent(appId)
           && resource.data.ownerUid == request.auth.uid
           && validCampaignMetric(request.resource.data, metricId, appId)
           && request.resource.data.ownerUid == resource.data.ownerUid
@@ -201,8 +276,9 @@ service cloud.firestore {
           && request.resource.data.views >= resource.data.views
           && request.resource.data.views <= resource.data.views + 1
           && request.resource.data.clicks >= resource.data.clicks
-          && request.resource.data.clicks <= resource.data.clicks + 1;
-        allow delete: if isAdmin(appId);
+          && request.resource.data.clicks <= resource.data.clicks + 1
+          && request.resource.data.views + request.resource.data.clicks == resource.data.views + resource.data.clicks + 1;
+        allow delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
       }
 
       // Bloquea el registro global usado por versiones anteriores.

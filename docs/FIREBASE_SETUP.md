@@ -35,7 +35,7 @@ El roster mínimo compartible se publica usando el código como identificador en
 
 Las reglas permiten consultar un documento exacto, pero deniegan listar la colección completa.
 
-Al aceptar un enlace, el invitado puede crear o actualizar exclusivamente el documento con su propio UID dentro de la lista de compañeros del remitente. Las reglas validan que el código de invitación pertenezca al remitente y que el código compartido pertenezca al usuario autenticado. Este permiso no permite leer otros datos privados ni añadir a terceros.
+Al aceptar un enlace, el invitado puede crear exclusivamente el documento con su propio UID dentro de la lista de compañeros del remitente si todavía no existe. Una transacción conserva los vínculos ya existentes. Las reglas validan los dos códigos y la creación de la contraparte. La lectura cruzada está limitada al registro mínimo del propio vínculo; no permite enumerar compañeros ni leer otros datos privados.
 
 ## Campañas y comentarios de beta
 
@@ -43,7 +43,7 @@ Las campañas viven en:
 
 `artifacts/roster-max-production/public/data/ads/{campaignId}`
 
-Solo un administrador activo puede crearlas, pausarlas o leer los comentarios recibidos. Los usuarios autenticados ven únicamente campañas activas cuya fecha y zona correspondan con su perfil.
+Solo un administrador activo puede crearlas, pausarlas o leer los comentarios recibidos. El cliente puede leer las campañas publicadas y selecciona localmente la activa cuya fecha y zona correspondan con su perfil; la segmentación no es una restricción de acceso a los documentos de campañas.
 
 Los comentarios enviados por participantes se guardan en:
 

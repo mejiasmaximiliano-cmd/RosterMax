@@ -1,10 +1,27 @@
+const DAY_IN_MS = 86400000;
+
+function timestampMillis(value) {
+  if (!value || typeof value.seconds !== 'number' || !Number.isFinite(value.seconds)) return null;
+  const milliseconds = value.seconds * 1000;
+  return milliseconds > 0 ? milliseconds : null;
+}
+
+function nonNegativeCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * Voluntary, pseudonymous activity: documents are associated with Firebase UIDs.
+ * The dashboard reports a sample, not total users, downloads or unique people.
+ * Rolling windows exclude future or malformed timestamps from old clients.
+ */
 export function getAudienceSummary(activityDocs, now = new Date()) {
   const nowMs = now.getTime();
   const within = (timestamp, days) => {
-    const seconds = Number(timestamp?.seconds || 0);
-    return seconds > 0 && nowMs - seconds * 1000 <= days * 86400000;
+    const activeMs = timestampMillis(timestamp);
+    return activeMs !== null && activeMs <= nowMs && nowMs - activeMs <= days * DAY_IN_MS;
   };
-  const docs = activityDocs || [];
+  const docs = Array.isArray(activityDocs) ? activityDocs.filter((item) => item && typeof item === 'object') : [];
   return {
     measuredUsers: docs.length,
     activeDay: docs.filter((item) => within(item.lastActiveAt, 1)).length,
@@ -16,12 +33,17 @@ export function getAudienceSummary(activityDocs, now = new Date()) {
   };
 }
 
+/**
+ * Client-reported campaign totals from consenting accounts. Reach counts accounts
+ * with a recorded view; it is not audited human reach. CTR may exceed 100% when a
+ * person clicks repeatedly; it is never clamped or presented as a conversion rate.
+ */
 export function getCampaignSummary(campaignId, metricDocs) {
-  const docs = (metricDocs || []).filter((item) => item.campaignId === campaignId);
-  const impressions = docs.reduce((total, item) => total + Math.max(0, Number(item.views || 0)), 0);
-  const clicks = docs.reduce((total, item) => total + Math.max(0, Number(item.clicks || 0)), 0);
+  const docs = (Array.isArray(metricDocs) ? metricDocs : []).filter((item) => item?.campaignId === campaignId);
+  const impressions = docs.reduce((total, item) => total + nonNegativeCount(item.views), 0);
+  const clicks = docs.reduce((total, item) => total + nonNegativeCount(item.clicks), 0);
   return {
-    reach: docs.filter((item) => Number(item.views || 0) > 0).length,
+    reach: docs.filter((item) => nonNegativeCount(item.views) > 0).length,
     impressions,
     clicks,
     ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,

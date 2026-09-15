@@ -2,18 +2,17 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calendar, CheckSquare, TrendingUp, User, 
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
-  Briefcase, Home, Sun, Moon, Search, FileText,
-  CheckCircle2, Circle, X, Award, Users,
+  Briefcase, Sun, Moon, Search, FileText,
+  CheckCircle2, Circle, X, Users,
   Plane, Thermometer, Zap, Wind,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
   CloudOff, ShieldAlert, Download, Send, Smartphone,
   Megaphone, Bell, BellRing, Clock3, Link2, LogIn, LogOut,
   ExternalLink, MessageSquare, PauseCircle, Umbrella, Stethoscope,
-  CalendarRange, WalletCards, Receipt, BarChart3, Activity, ChevronDown,
-  ChevronUp, Filter, Clock, PiggyBank
+  CalendarRange, BarChart3, Activity, ChevronDown,
+  ChevronUp, Filter, Clock, Pencil
 } from 'lucide-react';
 import { 
-  signInAnonymously, onAuthStateChanged, getIdTokenResult,
   GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut,
 } from 'firebase/auth';
 import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
@@ -21,6 +20,8 @@ import { APP_ID, auth, db } from './lib/firebase';
 import {
   SCHEDULE_EXCEPTION_TYPES,
   addDaysToDate,
+  getLocalDate,
+  isRestAvailable,
   getNextTransition,
   getStatusForDate,
   sanitizeSharedExceptions,
@@ -31,17 +32,22 @@ import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
 import { fetchCurrentWeather, searchWeatherLocations } from './lib/weather';
 import { findRestCoincidences, groupCoincidenceWindows } from './lib/coincidences';
 import { getTransitionReminder } from './lib/reminders';
-import { getGoalProjection, getMonthlyBudgetSummary } from './lib/finance';
 import { getAuthErrorMessage } from './lib/auth';
 import { selectActiveCampaign, validateCampaign } from './lib/ads';
 import { buildReciprocalFriendRecord, buildSyncedFriendRecord, findExistingConnection } from './lib/connections';
-import { getNextRestWindow, getTaskSummary, sortTasks } from './lib/planning';
+import { validateTask } from './lib/planning';
 import { getAudienceSummary, getCampaignSummary } from './lib/analytics';
 import OnboardingModal from './components/OnboardingModal';
+import SessionGate from './components/SessionGate';
+import { useToday } from './lib/useToday';
+import RosterCalendar from './components/RosterCalendar';
+import FinancePanel from './components/FinancePanel';
+import PlannerPanel from './components/PlannerPanel';
+import { getCalendarDayLabel } from './lib/calendar';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = import.meta.env.VITE_PUBLIC_APP_URL || 'https://rostermax.vercel.app';
-const APP_VERSION = 'beta-0.4';
+const APP_VERSION = 'beta-0.5';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -51,16 +57,10 @@ const EXCEPTION_LABELS = {
   special_roster: 'Roster especial',
 };
 
-const TASK_CATEGORY_LABELS = {
-  personal: 'Personal',
-  family: 'Familia',
-  health: 'Salud',
-  paperwork: 'Trámites',
-  learning: 'Formación',
-};
+
 
 function getTodayDate() {
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDate();
 }
 
 function getInviteCodeFromLocation() {
@@ -99,7 +99,7 @@ const DEFAULT_PROFILE = {
 };
 
 function getPublicName(currentUser, profile) {
-  return profile.displayName?.trim() || currentUser.displayName || 'Compañero RosterMax';
+  return (profile.displayName?.trim() || currentUser.displayName || 'Compañero RosterMax').slice(0, 40);
 }
 
 function getSyncCodeRef(code) {
@@ -151,17 +151,19 @@ function ScheduleExceptionIcon({ type, size = 18 }) {
 }
 
 export default function App() {
+  return <SessionGate>{({ user, admin }) => <SessionApp key={user.uid} user={user} hasAdminClaim={admin}/>}</SessionGate>;
+}
+
+function SessionApp({ user, hasAdminClaim }) {
   // --- STATES ---
-  const [user, setUser] = useState(null);
+  const today = useToday();
   const [activeTab, setActiveTab] = useState(() => getInviteCodeFromLocation() ? 'crew' : 'roster');
-  const [loading, setLoading] = useState(true);
   const [theme, setTheme] = useState('dark'); 
   const [addMethod, setAddMethod] = useState(() => getInviteCodeFromLocation() ? 'sync' : 'manual');
   
   // States: UX, PWA, Admin & Auth
   const [toast, setToast] = useState('');
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
-  const [hasAdminClaim, setHasAdminClaim] = useState(false);
   const [hasAdminRecord, setHasAdminRecord] = useState(false);
   const isAdmin = hasAdminClaim || hasAdminRecord;
   const [installPrompt, setInstallPrompt] = useState(null);
@@ -171,7 +173,13 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   
   // Data States
-  const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: new Date().toISOString().split('T')[0] });
+  const [rosterConfig, setRosterConfig] = useState({ workDays: 14, restDays: 14, startDate: getTodayDate() });
+  const [loaded, setLoaded] = useState({});
+  const [rosterSaved, setRosterSaved] = useState(false);
+  const [confirmed, setConfirmed] = useState({});
+  const sharedReady = confirmed.roster && confirmed.profile && confirmed.exceptions;
+  const [dataError, setDataError] = useState('');
+  const [pendingWrites, setPendingWrites] = useState(0);
   const [userProfile, setUserProfile] = useState(DEFAULT_PROFILE);
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
@@ -179,7 +187,7 @@ export default function App() {
   const [friends, setFriends] = useState([]); 
   const [scheduleExceptions, setScheduleExceptions] = useState([]);
   const [expenses, setExpenses] = useState([]);
-  const [financeSettings, setFinanceSettings] = useState({ monthlyIncome: 0, fixedCosts: 0, plannedSavings: 0, currency: 'ARS' });
+  const [financeSettings, setFinanceSettings] = useState({ currency: 'ARS' });
   const [privacySettings, setPrivacySettings] = useState({ analyticsEnabled: false });
   const [activityMetrics, setActivityMetrics] = useState([]);
   const [campaignMetrics, setCampaignMetrics] = useState([]);
@@ -195,9 +203,13 @@ export default function App() {
   const [crewSearch, setCrewSearch] = useState('');
   const [showAllFriends, setShowAllFriends] = useState(false);
   const [showAllCoincidences, setShowAllCoincidences] = useState(false);
-  const [taskFilter, setTaskFilter] = useState('open');
+
   const [showExceptionForm, setShowExceptionForm] = useState(false);
   const [exceptionType, setExceptionType] = useState('vacation');
+  const [editingException, setEditingException] = useState(null);
+  const [exceptionBusy, setExceptionBusy] = useState(false);
+  const [plannedDate, setPlannedDate] = useState('');
+  const exceptionSectionRef = useRef(null);
   const [installDetected, setInstallDetected] = useState(() => (
     localStorage.getItem('rostermax:installed') === '1'
     || window.matchMedia?.('(display-mode: standalone)').matches
@@ -213,6 +225,23 @@ export default function App() {
   const showToast = (message) => {
     setToast(message);
     setTimeout(() => setToast(''), 3000);
+  };
+
+  const savePrivate = async (promise, message) => {
+    setPendingWrites((count) => count + 1);
+    const completion = promise.then(() => {
+      if (navigator.onLine) showToast(message);
+      return true;
+    }).catch((error) => {
+      console.error('No se pudo guardar el cambio.', error);
+      setDataError('Un cambio no pudo sincronizarse. Revisa tu conexión y vuelve a intentarlo.');
+      return false;
+    }).finally(() => setPendingWrites((count) => Math.max(0, count - 1)));
+    if (!navigator.onLine) {
+      showToast('Cambio en cola. Se enviará al recuperar conexión.');
+      return true;
+    }
+    return completion;
   };
 
   // --- ESCUDO ANTI-AMNESIA & PWA ---
@@ -241,35 +270,6 @@ export default function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
-  }, []);
-
-  // --- MOTOR DE AUTENTICACIÓN ---
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        try {
-          const token = await getIdTokenResult(currentUser);
-          setHasAdminClaim(token.claims.admin === true);
-          setHasAdminRecord(false);
-          setUser(currentUser);
-          setAuthMsg('');
-        } catch (error) {
-          console.error('No se pudo validar la sesión.', error);
-          setAuthMsg('No se pudo validar la sesión. Revisa tu conexión.');
-        } finally {
-          setLoading(false);
-        }
-      } else {
-        try {
-          await signInAnonymously(auth);
-        } catch (error) {
-          console.error('No se pudo iniciar la sesión invitada.', error);
-          setAuthMsg('No pudimos iniciar tu sesión. Reintenta con conexión.');
-          setLoading(false);
-        }
-      }
-    });
-    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -325,40 +325,56 @@ export default function App() {
 
     ensureSyncCode();
     return () => { cancelled = true; };
-  }, [user]);
+  }, [user, isOffline]);
 
   // Publica únicamente el calendario compartible. Los motivos privados de
   // ausencias se eliminan antes de sincronizar con compañeros.
   useEffect(() => {
-    if (!user || !syncCode) return;
-    setDoc(getSyncCodeRef(syncCode), {
-      ownerUid: user.uid,
-      syncCode,
-      name: getPublicName(user, userProfile),
-      workDays: rosterConfig.workDays,
-      restDays: rosterConfig.restDays,
-      startDate: rosterConfig.startDate,
-      exceptions: sanitizeSharedExceptions(scheduleExceptions),
-      updatedAt: serverTimestamp(),
-    }, { merge: true }).catch((error) => {
-      console.error('No se pudo publicar el roster compartible.', error);
-      setSyncState('error');
-    });
-  }, [user, syncCode, userProfile, rosterConfig.workDays, rosterConfig.restDays, rosterConfig.startDate, scheduleExceptions]);
+    if (!user || !syncCode || !sharedReady || !rosterSaved || isOffline) return;
+    let cancelled = false;
+    const publish = async () => {
+      try {
+        await setDoc(getSyncCodeRef(syncCode), {
+          ownerUid: user.uid, syncCode, name: getPublicName(user, userProfile),
+          workDays: Number(rosterConfig.workDays), restDays: Number(rosterConfig.restDays),
+          startDate: rosterConfig.startDate,
+          exceptions: sanitizeSharedExceptions(scheduleExceptions), updatedAt: serverTimestamp(),
+        });
+        if (!cancelled) setSyncState('ready');
+      } catch (error) {
+        console.error('No se pudo publicar el roster compartible.', error);
+        if (!cancelled) setSyncState('error');
+      }
+    };
+    publish();
+    return () => { cancelled = true; };
+  }, [user, syncCode, userProfile, rosterConfig.workDays, rosterConfig.restDays, rosterConfig.startDate, scheduleExceptions, sharedReady, rosterSaved, isOffline]);
 
   // --- BASE DE DATOS PRIVADA EN TIEMPO REAL ---
   useEffect(() => {
     if (!user) return;
-    const logRealtimeError = (source) => (error) => console.error(`Error de lectura en ${source}.`, error);
+    const logRealtimeError = (source) => (error) => {
+      console.error(`Error de lectura en ${source}.`, error);
+      setDataError(`No pudimos cargar ${source}. Reintenta con conexión antes de modificar tus datos.`);
+    };
+    const markLoaded = (key) => setLoaded((current) => ({ ...current, [key]: true }));
+    const confirmShared = (key, snapshot) => {
+      setConfirmed((current) => ({ ...current, [key]: !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites }));
+    };
 
-    const unsubRoster = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), (snapshot) => {
+    const unsubRoster = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), { includeMetadataChanges: true }, (snapshot) => {
       if (snapshot.exists()) setRosterConfig(snapshot.data());
+      setRosterSaved(snapshot.exists() && validateRosterConfig(snapshot.data()).valid);
+      markLoaded('roster');
+      confirmShared('roster', snapshot);
     }, logRealtimeError('roster'));
-    const unsubProfile = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), (snapshot) => {
+    const unsubProfile = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), { includeMetadataChanges: true }, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
         setUserProfile({ ...DEFAULT_PROFILE, ...data, weatherLocation: data.weatherLocation || DEFAULT_WEATHER_LOCATION });
       }
+      markLoaded('profile');
+      confirmShared('profile', snapshot);
     }, logRealtimeError('perfil'));
     const unsubTheme = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), (snapshot) => {
       if (snapshot.exists()) setTheme(snapshot.data().mode);
@@ -368,25 +384,32 @@ export default function App() {
     }, logRealtimeError('recordatorios'));
     const unsubFinanceSettings = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'finance'), (snapshot) => {
       if (snapshot.exists()) setFinanceSettings((current) => ({ ...current, ...snapshot.data() }));
+      markLoaded('finance');
     }, logRealtimeError('presupuesto'));
     const unsubPrivacy = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'privacy'), (snapshot) => {
       if (snapshot.exists()) setPrivacySettings((current) => ({ ...current, ...snapshot.data() }));
+      markLoaded('privacy');
     }, logRealtimeError('privacidad'));
     const unsubOnboarding = onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), (snapshot) => {
       const completed = snapshot.exists() && snapshot.data().completed === true;
       if (!completed && localStorage.getItem(ONBOARDING_DISMISS_KEY) !== '1') setShowOnboarding(true);
     }, logRealtimeError('guía inicial'));
     
-    const unsubTasks = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('tareas'));
-    const unsubGoals = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), (s) => setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('metas'));
+    const unsubTasks = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), (s) => { setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))); markLoaded('tasks'); }, logRealtimeError('tareas'));
+    const unsubGoals = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), (s) => { setGoals(s.docs.map(d => ({ id: d.id, ...d.data() }))); markLoaded('goals'); }, logRealtimeError('metas'));
     const unsubLogs = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'logs'), (s) => setLogs(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('bitácora'));
     const unsubFriends = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), (s) => setFriends(s.docs.map(d => ({ id: d.id, ...d.data() }))), logRealtimeError('compañeros'));
-    const unsubExceptions = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), (snapshot) => setScheduleExceptions(snapshot.docs
-      .map((item) => ({ id: item.id, ...item.data() }))
-      .sort((left, right) => left.startDate.localeCompare(right.startDate))), logRealtimeError('cambios de roster'));
-    const unsubExpenses = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), (snapshot) => setExpenses(snapshot.docs
-      .map((item) => ({ id: item.id, ...item.data() }))
-      .sort((left, right) => String(right.date).localeCompare(String(left.date)))), logRealtimeError('gastos'));
+    const unsubExceptions = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), { includeMetadataChanges: true }, (snapshot) => {
+      setScheduleExceptions(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+        .sort((left, right) => String(left.startDate).localeCompare(String(right.startDate))));
+      markLoaded('exceptions');
+      confirmShared('exceptions', snapshot);
+    }, logRealtimeError('cambios de roster'));
+    const unsubExpenses = onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), (snapshot) => {
+      setExpenses(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+        .sort((left, right) => String(right.date).localeCompare(String(left.date))));
+      markLoaded('expenses');
+    }, logRealtimeError('gastos'));
     
     const unsubAds = onSnapshot(collection(db, 'artifacts', APP_ID, 'public', 'data', 'ads'), (snapshot) => {
       setAds(snapshot.docs.map((adDoc) => ({ id: adDoc.id, ...adDoc.data() })));
@@ -413,7 +436,7 @@ export default function App() {
   // Métricas propias, agregadas en el panel CEO y desactivadas por defecto.
   // Nunca se envían nombres, correos, empresa, ubicación ni contenido privado.
   useEffect(() => {
-    if (!user || !privacySettings.analyticsEnabled) return;
+    if (!user || !loaded.privacy || !loaded.roster || !loaded.profile || !privacySettings.analyticsEnabled || isOffline) return;
     const activityRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid);
     runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(activityRef);
@@ -422,14 +445,14 @@ export default function App() {
         accountType: user.isAnonymous ? 'guest' : 'google',
         firstSeenAt: snapshot.exists() ? snapshot.data().firstSeenAt : serverTimestamp(),
         lastActiveAt: serverTimestamp(),
-        lastActiveDay: getTodayDate(),
-        installDetected,
-        rosterConfigured: validateRosterConfig(rosterConfig).valid,
+        lastActiveDay: today,
+        installDetected: Boolean(installDetected),
+        rosterConfigured: rosterSaved,
         profileComplete: Boolean(userProfile.displayName?.trim()),
         appVersion: APP_VERSION,
       });
-    }).catch((error) => console.error('No se pudo actualizar la métrica anónima de actividad.', error));
-  }, [user, privacySettings.analyticsEnabled, installDetected, rosterConfig, userProfile.displayName]);
+    }).catch((error) => console.error('No se pudo actualizar la métrica de actividad.', error));
+  }, [user, privacySettings.analyticsEnabled, installDetected, rosterSaved, userProfile.displayName, today, loaded.privacy, loaded.roster, loaded.profile, isOffline]);
 
   useEffect(() => {
     if (!user || !isAdmin) return undefined;
@@ -532,7 +555,7 @@ export default function App() {
     let cancelled = false;
     const loadWeather = async () => {
       const location = userProfile.weatherLocation;
-      if (!location?.latitude || !location?.longitude) {
+      if (!Number.isFinite(location?.latitude) || !Number.isFinite(location?.longitude)) {
         setWeatherData({ temp: '--', loading: false, error: 'Configura el clima' });
         return;
       }
@@ -546,13 +569,14 @@ export default function App() {
     };
     loadWeather();
     return () => { cancelled = true; };
-  }, [userProfile.weatherLocation]);
+  }, [userProfile.weatherLocation, isOffline, today]);
 
   // Las alertas web locales se muestran cuando el usuario abre la app dentro
   // de la ventana elegida. Las notificaciones con la app cerrada requerirán Push.
   useEffect(() => {
     if (!reminderSettings.enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-    const reminder = getTransitionReminder(getTodayDate(), { ...rosterConfig, exceptions: scheduleExceptions }, reminderSettings.leadDays);
+    if (!rosterSaved || !loaded.exceptions) return;
+    const reminder = getTransitionReminder(today, { ...rosterConfig, exceptions: scheduleExceptions }, reminderSettings.leadDays);
     if (!reminder) return;
 
     const notificationKey = `rostermax:notified:${reminder.id}`;
@@ -577,61 +601,67 @@ export default function App() {
       }
     };
     notify();
-  }, [reminderSettings, rosterConfig, scheduleExceptions]);
+  }, [reminderSettings, rosterConfig, scheduleExceptions, today, rosterSaved, loaded.exceptions]);
 
   const effectiveRoster = useMemo(() => ({ ...rosterConfig, exceptions: scheduleExceptions }), [rosterConfig, scheduleExceptions]);
-  const currentStatus = useMemo(() => getStatusForDate(getTodayDate(), effectiveRoster), [effectiveRoster]);
-  const nextTransition = useMemo(() => getNextTransition(getTodayDate(), effectiveRoster), [effectiveRoster]);
-  const targetStatus = useMemo(() => getStatusForDate(targetDate, effectiveRoster), [targetDate, effectiveRoster]);
-  const upcomingCoincidences = useMemo(() => findRestCoincidences(
-    getTodayDate(),
+  const currentStatus = useMemo(() => rosterSaved ? getStatusForDate(today, effectiveRoster) : { error: 'Configura tu roster' }, [effectiveRoster, today, rosterSaved]);
+  const nextTransition = useMemo(() => rosterSaved ? getNextTransition(today, effectiveRoster) : { error: 'Configura tu roster' }, [effectiveRoster, today, rosterSaved]);
+  const targetStatus = useMemo(() => rosterSaved ? getStatusForDate(targetDate, effectiveRoster) : { error: 'Configura tu roster' }, [targetDate, effectiveRoster, rosterSaved]);
+  const upcomingCoincidences = useMemo(() => rosterSaved ? findRestCoincidences(
+    today,
     effectiveRoster,
     displayFriends.filter((friend) => friend.syncAvailable !== false),
-    { horizonDays: 120, maxResults: 40 },
-  ), [effectiveRoster, displayFriends]);
+    { horizonDays: 120, maxResults: 120 * Math.max(1, displayFriends.length) },
+  ) : [], [effectiveRoster, displayFriends, today, rosterSaved]);
   const groupedCoincidences = useMemo(() => groupCoincidenceWindows(upcomingCoincidences), [upcomingCoincidences]);
   const visibleCoincidences = showAllCoincidences ? groupedCoincidences : groupedCoincidences.slice(0, 3);
   const filteredFriends = useMemo(() => displayFriends
     .filter((friend) => friend.name?.toLowerCase().includes(crewSearch.trim().toLowerCase()))
     .sort((left, right) => String(left.name).localeCompare(String(right.name), 'es')), [displayFriends, crewSearch]);
   const visibleFriends = showAllFriends ? filteredFriends : filteredFriends.slice(0, 6);
-  const nextRestWindow = useMemo(() => getNextRestWindow(getTodayDate(), effectiveRoster), [effectiveRoster]);
-  const orderedTasks = useMemo(() => sortTasks(tasks), [tasks]);
-  const taskSummary = useMemo(() => getTaskSummary(tasks, getTodayDate()), [tasks]);
-  const visibleTasks = useMemo(() => orderedTasks.filter((task) => (
-    taskFilter === 'all' || (taskFilter === 'done' ? task.completed : !task.completed)
-  )), [orderedTasks, taskFilter]);
-  const budgetSummary = useMemo(() => getMonthlyBudgetSummary(financeSettings, expenses, rosterConfig, getTodayDate().slice(0, 7)), [financeSettings, expenses, rosterConfig]);
+
   const audienceSummary = useMemo(() => getAudienceSummary(activityMetrics), [activityMetrics]);
   const currentAd = useMemo(
-    () => selectActiveCampaign(ads, userProfile, getTodayDate()),
-    [ads, userProfile],
+    () => selectActiveCampaign(ads, userProfile, today),
+    [ads, userProfile, today],
   );
   const activeAdCount = useMemo(
-    () => ads.filter((ad) => ad.active === true && (!ad.endDate || ad.endDate >= getTodayDate())).length,
-    [ads],
+    () => ads.filter((ad) => ad.active === true && (!ad.endDate || ad.endDate >= today) && (!ad.startDate || ad.startDate <= today)).length,
+    [ads, today],
   );
 
   useEffect(() => {
-    if (!currentAd?.id || !privacySettings.analyticsEnabled || !adContainerRef.current || typeof IntersectionObserver === 'undefined') return undefined;
-    const sessionKey = `rostermax:ad-view:${currentAd.id}`;
+    if (activeTab !== 'roster' || !currentAd?.id || !privacySettings.analyticsEnabled || isOffline || !adContainerRef.current || typeof IntersectionObserver === 'undefined') return undefined;
+    const sessionKey = `rostermax:ad-view:${user.uid}:${today}:${currentAd.id}`;
     if (sessionStorage.getItem(sessionKey) === '1') return undefined;
     let timer = null;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.intersectionRatio >= 0.5) {
-        if (!timer) timer = setTimeout(() => {
+    let visible = false;
+    let recording = false;
+    const cancelTimer = () => { clearTimeout(timer); timer = null; };
+    const schedule = () => {
+      cancelTimer();
+      if (!visible || document.visibilityState !== 'visible' || recording) return;
+      timer = setTimeout(async () => {
+        if (!visible || document.visibilityState !== 'visible') return;
+        recording = true;
+        try {
+          await trackCampaignMetric(user, currentAd.id, 'view');
           sessionStorage.setItem(sessionKey, '1');
-          trackCampaignMetric(user, currentAd.id, 'view').catch((error) => console.error('No se pudo registrar la impresión.', error));
           observer.disconnect();
-        }, 1000);
-      } else if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
+        } catch (error) {
+          console.error('No se pudo registrar la impresión.', error);
+          recording = false;
+        }
+      }, 1000);
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      visible = entry.intersectionRatio >= 0.5;
+      schedule();
     }, { threshold: [0.5] });
     observer.observe(adContainerRef.current);
-    return () => { if (timer) clearTimeout(timer); observer.disconnect(); };
-  }, [currentAd, privacySettings.analyticsEnabled, user]);
+    document.addEventListener('visibilitychange', schedule);
+    return () => { cancelTimer(); observer.disconnect(); document.removeEventListener('visibilitychange', schedule); };
+  }, [currentAd, privacySettings.analyticsEnabled, user, activeTab, isOffline, today, loaded.roster, loaded.profile, loaded.exceptions]);
 
   // --- HANDLERS ACCIONES PWA ---
   const handleInstallClick = async () => {
@@ -685,6 +715,8 @@ export default function App() {
   };
 
   const shareMyCode = async () => {
+    if (!rosterSaved) { setShowOnboarding(true); showToast('Guarda tu roster antes de invitar.'); return; }
+    if (!sharedReady || syncState !== 'ready') { showToast('Espera a que tu roster termine de sincronizarse.'); return; }
     if (!syncCode) {
       showToast('Tu código todavía se está preparando.');
       return;
@@ -713,19 +745,8 @@ export default function App() {
   // --- SUBMIT FORMULARIOS ---
   const saveRoster = async (rosterData) => {
     const validation = validateRosterConfig(rosterData);
-    if (!validation.valid) {
-      showToast(validation.error);
-      return false;
-    }
-    try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), rosterData);
-      showToast("Diagrama actualizado.");
-      return true;
-    } catch (error) {
-      console.error('No se pudo actualizar el diagrama.', error);
-      showToast('No se pudo guardar el diagrama.');
-      return false;
-    }
+    if (!validation.valid) { showToast(validation.error); return false; }
+    return savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'roster'), rosterData), 'Diagrama actualizado.');
   };
 
   const updateRoster = async (event) => {
@@ -738,22 +759,13 @@ export default function App() {
     });
   };
 
-  const saveProfile = async (profileData) => {
-    try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), {
-        ...DEFAULT_PROFILE,
-        ...profileData,
-        displayName: String(profileData.displayName || '').trim().slice(0, 40),
-        weatherLocation: profileData.weatherLocation || userProfile.weatherLocation || DEFAULT_WEATHER_LOCATION,
-      });
-      showToast("Perfil guardado.");
-      return true;
-    } catch (error) {
-      console.error('No se pudo guardar el perfil.', error);
-      showToast('No se pudo guardar el perfil.');
-      return false;
-    }
-  };
+  const saveProfile = async (profileData) => savePrivate(
+    setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'profile'), {
+      ...DEFAULT_PROFILE, ...profileData,
+      displayName: String(profileData.displayName || '').trim().slice(0, 40),
+      weatherLocation: profileData.weatherLocation || userProfile.weatherLocation || DEFAULT_WEATHER_LOCATION,
+    }), 'Perfil guardado.',
+  );
 
   const updateProfile = async (event) => {
     event.preventDefault();
@@ -771,20 +783,13 @@ export default function App() {
   };
 
   const completeOnboarding = async (destination = 'roster') => {
-    try {
-      await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), {
-        completed: true,
-        version: 2,
-        completedAt: serverTimestamp(),
-      });
-      localStorage.removeItem(ONBOARDING_DISMISS_KEY);
-      setShowOnboarding(false);
-      setActiveTab(destination);
-      showToast('RosterMax está listo para usar.');
-    } catch (error) {
-      console.error('No se pudo completar la guía.', error);
-      showToast('No se pudo guardar el avance de la guía.');
-    }
+    const saved = await savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), {
+      completed: true, version: 2, completedAt: serverTimestamp(),
+    }), 'Configuración guardada.');
+    if (!saved) return;
+    localStorage.removeItem(ONBOARDING_DISMISS_KEY);
+    setShowOnboarding(false);
+    setActiveTab(destination);
   };
 
   const skipOnboarding = () => {
@@ -832,6 +837,13 @@ export default function App() {
 
   // --- MULTIJUGADOR: PROCESO REAL DE VINCULACIÓN ---
   const linkSyncCode = async (rawCode, { reciprocal = false } = {}) => {
+    if (!navigator.onLine) { showToast('Conéctate para comprobar la invitación.'); return false; }
+    if (!sharedReady) { showToast('Estamos cargando tu roster guardado. Espera un momento y vuelve a intentar.'); return false; }
+    if (!rosterSaved) {
+      showToast('Configura y guarda tu roster antes de compartirlo.');
+      setShowOnboarding(true);
+      return false;
+    }
     const codeInput = normalizeSyncCode(rawCode);
     if (!isValidSyncCode(codeInput)) {
       showToast("El código debe tener el formato RM-XXXXXXXX.");
@@ -867,33 +879,32 @@ export default function App() {
           ownerUid: user.uid,
           syncCode,
           name: getPublicName(user, userProfile),
-          workDays: rosterConfig.workDays,
-          restDays: rosterConfig.restDays,
+          workDays: Number(rosterConfig.workDays),
+          restDays: Number(rosterConfig.restDays),
           startDate: rosterConfig.startDate,
           exceptions: sanitizeSharedExceptions(scheduleExceptions),
           updatedAt: serverTimestamp(),
-        }, { merge: true });
+        });
 
-        const batch = writeBatch(db);
-        if (!existingConnection) {
-          batch.set(
-            doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', foundUser.ownerUid),
-            { ...buildSyncedFriendRecord(foundUser, codeInput), createdAt: serverTimestamp() },
-          );
-        }
-        batch.set(
-          doc(db, 'artifacts', APP_ID, 'users', foundUser.ownerUid, 'friends', user.uid),
-          {
+        const ownRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', foundUser.ownerUid);
+        const reverseRef = doc(db, 'artifacts', APP_ID, 'users', foundUser.ownerUid, 'friends', user.uid);
+        await runTransaction(db, async (transaction) => {
+          const own = await transaction.get(ownRef);
+          const reverse = await transaction.get(reverseRef);
+          if (!own.exists()) transaction.set(ownRef, {
+            ...buildSyncedFriendRecord(foundUser, codeInput), createdAt: serverTimestamp(),
+          });
+          if (!reverse.exists()) transaction.set(reverseRef, {
             ...buildReciprocalFriendRecord({
-              uid: user.uid,
-              name: getPublicName(user, userProfile),
-              syncCode,
-              inviteCode: codeInput,
+              uid: user.uid, name: getPublicName(user, userProfile), syncCode, inviteCode: codeInput,
             }),
             createdAt: serverTimestamp(),
-          },
-        );
-        await batch.commit();
+          });
+          // Migración de vínculos antiguos con IDs aleatorios a un único vínculo por cuenta.
+          if (existingConnection && existingConnection.id !== foundUser.ownerUid) {
+            transaction.delete(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', existingConnection.id));
+          }
+        });
         showToast(`¡Listo! Tú y ${foundUser.name} ya comparten sus rosters.`);
       } else {
         await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'friends'), {
@@ -965,18 +976,20 @@ export default function App() {
   const addGenericDoc = async (event, collectionName, fields) => {
     event.preventDefault();
     const formElement = event.currentTarget;
-    await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() });
-    formElement.reset();
+    const saved = await savePrivate(addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() }), 'Registro guardado.');
+    if (saved) formElement.reset();
   };
 
-  const toggleLog = async (log) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { ...log, resolved: !log.resolved });
-  const toggleTask = async (task) => await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), { completed: !task.completed, updatedAt: serverTimestamp() }, { merge: true });
+  const toggleLog = async (log) => savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { resolved: !log.resolved }, { merge: true }), 'Registro actualizado.');
+
 
   const createScheduleException = async (event) => {
     event.preventDefault();
+    if (exceptionBusy) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const validation = validateScheduleException({
+      id: editingException?.id,
       type: form.get('type'),
       label: form.get('label'),
       startDate: form.get('startDate'),
@@ -990,122 +1003,76 @@ export default function App() {
       return;
     }
     try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), {
-        ...validation.exception,
-        createdAt: serverTimestamp(),
-      });
+      setExceptionBusy(true);
+      const saved = await savePrivate(editingException
+        ? setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', editingException.id), { ...validation.exception, updatedAt: serverTimestamp() }, { merge: true })
+        : addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), { ...validation.exception, createdAt: serverTimestamp() }), 'Cambio temporal aplicado al calendario.');
+      if (!saved) return;
       formElement.reset();
+      setEditingException(null);
       setExceptionType('vacation');
       setShowExceptionForm(false);
-      showToast('Cambio temporal aplicado al calendario.');
     } catch (error) {
       console.error('No se pudo guardar el cambio temporal.', error);
       showToast('No se pudo guardar el cambio de roster.');
+    } finally {
+      setExceptionBusy(false);
     }
   };
 
-  const createRestTask = async (event) => {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const title = String(form.get('title') || '').trim().slice(0, 100);
-    if (!title) return;
-    try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), {
-        title,
-        date: String(form.get('date') || ''),
-        category: String(form.get('category') || 'personal'),
-        priority: String(form.get('priority') || 'medium'),
-        estimatedMinutes: Math.max(0, Number(form.get('estimatedMinutes') || 0)),
-        completed: false,
-        createdAt: serverTimestamp(),
-      });
-      formElement.reset();
-      showToast('Plan agregado a tu próximo franco.');
-    } catch (error) {
-      console.error('No se pudo crear la tarea.', error);
-      showToast('No se pudo agregar el plan.');
-    }
+  const saveRestTask = async (task) => {
+    const validation = validateTask(task);
+    if (!validation.valid) { showToast(validation.error); return false; }
+    const data = { ...validation.task, updatedAt: serverTimestamp() };
+    return savePrivate(task.id
+      ? setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), data, { merge: true })
+      : addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), { ...data, createdAt: serverTimestamp() }),
+    task.id ? 'Plan actualizado.' : 'Plan guardado.');
   };
 
-  const saveFinancePlan = async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const plan = {
-      monthlyIncome: Math.max(0, Number(form.get('monthlyIncome') || 0)),
-      fixedCosts: Math.max(0, Number(form.get('fixedCosts') || 0)),
-      plannedSavings: Math.max(0, Number(form.get('plannedSavings') || 0)),
-      currency: String(form.get('currency') || 'ARS'),
+  const saveFinancePlan = async ({ month, currency, monthlyIncome, fixedCosts, plannedSavings }) => {
+    const legacyExpenseCurrency = financeSettings.legacyExpenseCurrency || financeSettings.currency || 'ARS';
+    const monthlyPlans = {};
+    if (!financeSettings.monthlyPlans && Object.hasOwn(financeSettings, 'monthlyIncome')) {
+      monthlyPlans[today.slice(0, 7)] = { [legacyExpenseCurrency]: {
+        monthlyIncome: Number(financeSettings.monthlyIncome || 0), fixedCosts: Number(financeSettings.fixedCosts || 0),
+        plannedSavings: Number(financeSettings.plannedSavings || 0), currency: legacyExpenseCurrency,
+      } };
+    }
+    monthlyPlans[month] = { ...monthlyPlans[month], [currency]: { monthlyIncome, fixedCosts, plannedSavings, currency } };
+    return savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'finance'), {
+      currency, legacyExpenseCurrency,
+      monthlyPlans,
       updatedAt: serverTimestamp(),
-    };
-    if (plan.fixedCosts + plan.plannedSavings > plan.monthlyIncome && plan.monthlyIncome > 0) {
-      showToast('Los gastos fijos y el ahorro superan el ingreso mensual.');
-      return;
-    }
-    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'finance'), plan, { merge: true });
-    showToast('Presupuesto mensual actualizado.');
+    }, { merge: true }), 'Presupuesto del mes guardado.');
   };
 
-  const addExpense = async (event) => {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const amount = Number(form.get('amount'));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      showToast('Ingresa un gasto mayor que cero.');
-      return;
-    }
-    await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), {
-      amount,
-      category: String(form.get('category') || 'otros'),
-      note: String(form.get('note') || '').trim().slice(0, 80),
-      date: String(form.get('date') || getTodayDate()),
-      createdAt: serverTimestamp(),
-    });
-    formElement.reset();
-    showToast('Gasto registrado.');
-  };
+  const addExpense = async (expense) => savePrivate(
+    addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses'), { ...expense, createdAt: serverTimestamp() }),
+    'Gasto registrado.',
+  );
 
   const toggleAnalytics = async () => {
+    if (!loaded.privacy) return;
     const nextValue = !privacySettings.analyticsEnabled;
-    await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'privacy'), {
-      analyticsEnabled: nextValue,
-      updatedAt: serverTimestamp(),
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'privacy'), {
+      analyticsEnabled: nextValue, updatedAt: serverTimestamp(),
     }, { merge: true });
-    if (!nextValue) {
-      await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid));
-    }
-    showToast(nextValue ? 'Métricas anónimas activadas.' : 'Métricas anónimas desactivadas.');
+    if (!nextValue) batch.delete(doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid));
+    await savePrivate(batch.commit(), nextValue ? 'Métricas opcionales activadas.' : 'Métricas desactivadas.');
   };
 
-  const createFinancialGoal = async (event) => {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const target = Number(form.get('target'));
-    const monthlyPlan = Number(form.get('monthlyPlan'));
-    if (!Number.isFinite(target) || target <= 0 || !Number.isFinite(monthlyPlan) || monthlyPlan < 0) {
-      showToast('Revisa los montos de la meta.');
-      return;
-    }
-    try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), {
-        title: String(form.get('title')).trim().slice(0, 80),
-        target,
-        monthlyPlan,
-        current: 0,
-        currency: form.get('currency'),
-        createdAt: serverTimestamp(),
-      });
-      formElement.reset();
-      showToast('Meta financiera creada.');
-    } catch (error) {
-      console.error('No se pudo crear la meta.', error);
-      showToast('No se pudo crear la meta.');
-    }
-  };
+  const createFinancialGoal = async (goal) => savePrivate(
+    addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'goals'), { ...goal, current: 0, createdAt: serverTimestamp() }),
+    'Meta de ahorro creada.',
+  );
 
   const addFunds = async (goal, amount) => {
+    if (!navigator.onLine) {
+      showToast('Conéctate para confirmar el saldo antes de registrar un aporte.');
+      return false;
+    }
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) {
       showToast('Ingresa un aporte mayor que cero.');
@@ -1117,7 +1084,9 @@ export default function App() {
         const snapshot = await transaction.get(goalRef);
         if (!snapshot.exists()) throw new Error('La meta ya no existe.');
         const data = snapshot.data();
-        const nextAmount = Math.min(Number(data.target), Number(data.current || 0) + value);
+        const remaining = Math.round((Number(data.target) - Number(data.current || 0)) * 100) / 100;
+        if (value > remaining) throw new Error('El aporte supera lo que falta para esta meta.');
+        const nextAmount = Math.round((Number(data.current || 0) + value) * 100) / 100;
         transaction.set(goalRef, { current: nextAmount, updatedAt: serverTimestamp() }, { merge: true });
       });
       showToast(`Aporte de ${formatAmount(value, goal.currency)} registrado.`);
@@ -1220,7 +1189,7 @@ export default function App() {
 
   const shouldShowAd = Boolean(currentAd);
 
-  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-emerald-500"></div></div>;
+  if (!loaded.roster || !loaded.profile || !loaded.exceptions) return <main className="min-h-screen bg-slate-950 text-white grid place-items-center p-6"><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => window.location.reload()}>Volver a intentar</button>}</div></main>;
 
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
@@ -1251,7 +1220,7 @@ export default function App() {
       
       {/* NOTIFICACIONES TOAST */}
       {toast && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-emerald-500 text-white px-5 py-2.5 rounded-full font-bold shadow-xl z-[100] text-sm animate-in slide-in-from-top-4 flex items-center">
+        <div role="status" className="fixed top-4 left-1/2 transform -translate-x-1/2 w-max max-w-[calc(100%-2rem)] bg-slate-800 border border-slate-600 text-white px-5 py-2.5 rounded-2xl font-semibold shadow-xl z-[150] text-sm flex items-center">
           <CheckCircle2 size={16} className="mr-2"/> {toast}
         </div>
       )}
@@ -1277,6 +1246,10 @@ export default function App() {
       </header>
 
       <main className="max-w-md mx-auto p-4 space-y-6">
+        {dataError && <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p>{dataError}</p><button onClick={() => window.location.reload()} className="mt-2 underline font-bold">Volver a cargar</button></div>}
+        {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprueba la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
+        {pendingWrites > 0 && <p role="status" className={`text-xs ${textMuted}`}>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</p>}
+        {!rosterSaved && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configura tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indica cuántos días trabajas, cuántos descansas y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="mt-3 bg-emerald-500 text-white rounded-xl px-4 py-3 font-bold">Configurar mi roster</button></div>}
         
         {installPrompt && (
           <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
@@ -1288,15 +1261,19 @@ export default function App() {
         {/* TAB 1: ROSTER */}
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {rosterSaved && <RosterCalendar config={effectiveRoster} today={today} theme={theme} tasks={tasks}
+              onPlanDate={(date) => { setPlannedDate(date); setActiveTab('planner'); window.scrollTo({ top: 0 }); }}
+              onManageExceptions={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}/>
+            }
             <div className={`relative overflow-hidden rounded-3xl border p-6 ${cardClasses[theme]}`}>
               <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-emerald-500/20 blur-3xl"></div>
               <div className="flex items-center justify-between mb-4 relative z-10">
                 <h2 className={`text-xs font-bold uppercase tracking-widest ${textMuted}`}>Estado Hoy</h2>
-                {currentStatus?.error ? <span className="text-xs text-red-400">Configura tu fecha</span> : currentStatus?.isWorking ? <span className="flex items-center text-xs font-bold px-3 py-1 bg-amber-500/20 text-amber-500 rounded-full"><Briefcase size={12} className="mr-1.5" /> En Yacimiento</span> : <span className="flex items-center text-xs font-bold px-3 py-1 bg-emerald-500/20 text-emerald-500 rounded-full"><Home size={12} className="mr-1.5" /> De Franco</span>}
+                <span className="text-xs font-bold rounded-full px-3 py-1 bg-blue-500/10 text-blue-500">{currentStatus.error ? 'Configura tu roster' : getCalendarDayLabel(currentStatus)}</span>
               </div>
               <div className="relative z-10">
                 <div className="flex items-baseline space-x-2"><span className="text-6xl font-black">{currentStatus?.actualDay || 0}</span><span className={`text-xl font-medium ${textMuted}`}>/ {currentStatus?.totalPhaseDays || 0}</span></div>
-                <p className={`mt-1 text-sm ${textMuted}`}>Días {currentStatus?.isWorking ? 'trabajados' : 'descansados'} del ciclo.</p>
+                <p className={`mt-1 text-sm ${textMuted}`}>{currentStatus.error ? 'Todavía no hay un diagrama guardado.' : currentStatus.isOverride ? 'Día del cambio temporal.' : `Días ${currentStatus.isWorking ? 'trabajados' : 'de franco'} del ciclo.`}</p>
                 {currentStatus?.isOverride && <p className="mt-2 inline-flex items-center rounded-full bg-indigo-500/15 px-3 py-1 text-[10px] font-bold text-indigo-400"><CalendarRange size={12} className="mr-1.5"/>{currentStatus.exceptionLabel || EXCEPTION_LABELS[currentStatus.exceptionType]}</p>}
               </div>
               <div className={`mt-6 h-2.5 w-full rounded-full overflow-hidden ${theme === 'light' ? 'bg-slate-200' : 'bg-slate-800/50'}`}>
@@ -1319,24 +1296,29 @@ export default function App() {
               </div>
             )}
 
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+            <div ref={exceptionSectionRef} className={`scroll-mt-24 rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex items-start justify-between gap-3">
                 <div><h3 className="font-bold flex items-center"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después vuelves automáticamente a tu diagrama habitual.</p></div>
-                <button type="button" onClick={() => setShowExceptionForm((value) => !value)} className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-bold text-white">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
+                <button type="button" onClick={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm((value) => !value); }} className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-3 text-xs font-bold text-white">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
               </div>
 
               {showExceptionForm && (
-                <form onSubmit={createScheduleException} className={`mt-4 space-y-3 rounded-xl border p-4 ${theme === 'light' ? 'bg-indigo-50/60 border-indigo-100' : 'bg-indigo-500/5 border-indigo-500/20'}`}>
-                  <select name="type" value={exceptionType} onChange={(event) => setExceptionType(event.target.value)} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}>
+                <form key={editingException?.id || 'new'} onSubmit={createScheduleException} className={`mt-4 space-y-3 rounded-xl border p-4 ${theme === 'light' ? 'bg-indigo-50/60 border-indigo-100' : 'bg-indigo-500/5 border-indigo-500/20'}`}>
+                  <h4 className="font-bold">{editingException ? 'Editar cambio temporal' : 'Nuevo cambio temporal'}</h4>
+                  <label className="block text-xs font-semibold">Tipo de cambio<select name="type" value={exceptionType} onChange={(event) => setExceptionType(event.target.value)} className={`mt-1 w-full rounded-xl px-3 py-3 text-sm border ${inputBg}`}>
                     {Object.keys(SCHEDULE_EXCEPTION_TYPES).map((type) => <option key={type} value={type}>{EXCEPTION_LABELS[type]}</option>)}
-                  </select>
-                  <input name="label" type="text" maxLength="80" placeholder="Nota privada opcional" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}/>
+                  </select></label>
+                  <label className="block text-xs font-semibold">Nota privada (opcional)<input name="label" type="text" maxLength="60" defaultValue={editingException?.label || ''} className={`mt-1 w-full rounded-xl px-3 py-3 text-sm border ${inputBg}`}/></label>
                   <div className="grid grid-cols-2 gap-2">
-                    <label className={`text-[10px] font-bold ${textMuted}`}>Desde<input name="startDate" type="date" defaultValue={getTodayDate()} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label>
-                    <label className={`text-[10px] font-bold ${textMuted}`}>Hasta<input name="endDate" type="date" defaultValue={addDaysToDate(getTodayDate(), 6)} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label>
+                    <label className="text-xs font-semibold min-w-0">Desde<input name="startDate" type="date" defaultValue={editingException?.startDate || today} className={`mt-1 w-full min-w-0 rounded-xl px-2 py-3 text-sm border ${inputBg}`} required/></label>
+                    <label className="text-xs font-semibold min-w-0">Hasta<input name="endDate" type="date" defaultValue={editingException?.endDate || addDaysToDate(today, 6)} className={`mt-1 w-full min-w-0 rounded-xl px-2 py-3 text-sm border ${inputBg}`} required/></label>
                   </div>
-                  {exceptionType === 'special_roster' && <div className="space-y-2"><div className="grid grid-cols-2 gap-2"><input name="workDays" type="number" min="1" max="365" defaultValue="7" aria-label="Días de trabajo especiales" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="restDays" type="number" min="1" max="365" defaultValue="7" aria-label="Días de descanso especiales" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></div><label className={`block text-[10px] font-bold ${textMuted}`}>Primera subida del roster especial<input name="cycleStartDate" type="date" defaultValue={getTodayDate()} className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></label></div>}
-                  <button className="w-full rounded-xl bg-indigo-500 py-2.5 text-sm font-bold text-white">Aplicar cambio temporal</button>
+                  {exceptionType === 'special_roster' && <div className="space-y-3"><div className="grid grid-cols-2 gap-2">
+                    <label className="text-xs font-semibold">Trabajo (días)<input name="workDays" type="number" min="1" max="365" defaultValue={editingException?.workDays || 7} className={`mt-1 w-full rounded-xl px-3 py-3 border ${inputBg}`} required/></label>
+                    <label className="text-xs font-semibold">Franco (días)<input name="restDays" type="number" min="1" max="365" defaultValue={editingException?.restDays || 7} className={`mt-1 w-full rounded-xl px-3 py-3 border ${inputBg}`} required/></label>
+                  </div><label className="block text-xs font-semibold">Primera subida del roster especial<input name="cycleStartDate" type="date" defaultValue={editingException?.cycleStartDate || today} className={`mt-1 w-full rounded-xl px-3 py-3 text-sm border ${inputBg}`} required/></label></div>}
+                  <p className={`text-xs ${textMuted}`}>El día siguiente a “Hasta” se retoma el ciclo original. Tus compañeros verán tu disponibilidad sin el motivo privado.</p>
+                  <button disabled={exceptionBusy} className="w-full rounded-xl bg-indigo-500 py-3 text-sm font-bold text-white disabled:opacity-50">{exceptionBusy ? 'Guardando…' : editingException ? 'Guardar cambios' : 'Aplicar cambio temporal'}</button>
                 </form>
               )}
 
@@ -1346,7 +1328,8 @@ export default function App() {
                     <div key={exception.id} className={`rounded-xl border p-3 flex items-center gap-3 ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                       <div className="h-9 w-9 flex-shrink-0 rounded-lg bg-indigo-500/15 text-indigo-500 flex items-center justify-center"><ScheduleExceptionIcon type={exception.type}/></div>
                       <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{exception.label || EXCEPTION_LABELS[exception.type]}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(exception.startDate)} — {formatShortDate(exception.endDate)}{exception.type === 'special_roster' ? ` · ${exception.workDays}x${exception.restDays}` : ''}</p></div>
-                      <button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', exception.id))} className="p-2 text-slate-400 hover:text-red-400" aria-label={`Eliminar ${EXCEPTION_LABELS[exception.type]}`}><Trash2 size={15}/></button>
+                      <button type="button" onClick={() => { setEditingException(exception); setExceptionType(exception.type); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="min-h-11 min-w-11 grid place-items-center text-blue-500" aria-label={`Editar ${EXCEPTION_LABELS[exception.type]}`}><Pencil size={16}/></button>
+                      <button type="button" onClick={() => { if (window.confirm('¿Eliminar este cambio temporal y volver al diagrama habitual en esas fechas?')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', exception.id)), 'Cambio temporal eliminado.'); }} className="min-h-11 min-w-11 grid place-items-center text-slate-400 hover:text-red-400" aria-label={`Eliminar ${EXCEPTION_LABELS[exception.type]}`}><Trash2 size={16}/></button>
                     </div>
                   ))}
                 </div>
@@ -1384,8 +1367,8 @@ export default function App() {
                </div>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center text-indigo-400`}>
                  {getTransportIcon(userProfile.transport)}
-                 <span className={`text-sm font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>En {currentStatus?.daysLeftInPhase || 0} días</span>
-                 <span className={`text-[10px] uppercase font-bold mt-1`}>{userProfile.transport || 'Transporte'}</span>
+                 <span className={`text-sm font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>{nextTransition.error ? 'Sin fecha calculada' : `En ${nextTransition.daysUntil} días`}</span>
+                 <span className={`text-[10px] uppercase font-bold mt-1`}>{userProfile.transport || 'Transporte'}</span><span className={`mt-1 text-[9px] ${textMuted}`}>Según tu roster. Confirma el traslado con tu empresa.</span>
                </div>
             </div>
 
@@ -1402,7 +1385,7 @@ export default function App() {
                   <div key={log.id} className={`p-3 rounded-lg border text-sm flex items-start group transition-all duration-300 ${log.resolved ? 'opacity-50' : ''} ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                     <button onClick={() => toggleLog(log)} className="mr-3 mt-0.5 flex-shrink-0 transition-transform active:scale-90">{log.resolved ? <CheckCircle2 size={18} className="text-emerald-500" /> : <Circle size={18} className={textMuted} />}</button>
                     <span className={`flex-1 transition-all ${log.resolved ? 'line-through opacity-50' : ''}`}>{log.content}</span>
-                    <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id))} className="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity ml-2"><X size={16}/></button>
+                    <button onClick={() => savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id)), 'Nota eliminada.')} aria-label="Eliminar nota" className="text-slate-500 hover:text-red-400 min-h-11 min-w-11 grid place-items-center ml-2"><X size={16}/></button>
                   </div>
                 ))}
               </div>
@@ -1432,7 +1415,7 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-2 gap-3 mt-4">
                   <button type="button" onClick={clearPendingInvite} className={`py-2.5 rounded-xl border text-xs font-bold ${inputBg}`}>Descartar</button>
-                  <button type="button" onClick={acceptPendingInvite} disabled={!pendingInvite.data || pendingInvite.loading || syncState !== 'ready'} className="py-2.5 rounded-xl bg-blue-500 text-white text-xs font-bold disabled:opacity-50">Aceptar y compartir</button>
+                  <button type="button" onClick={acceptPendingInvite} disabled={!pendingInvite.data || pendingInvite.loading || syncState !== 'ready' || !sharedReady} className="py-2.5 rounded-xl bg-blue-500 text-white text-xs font-bold disabled:opacity-50">Aceptar y compartir</button>
                 </div>
               </div>
             )}
@@ -1441,19 +1424,19 @@ export default function App() {
               <div className="absolute -right-4 -top-4 opacity-10"><Search size={80} className="text-blue-500"/></div>
               <h3 className="font-bold flex items-center mb-1"><Search size={18} className="mr-2 text-blue-500"/> Simulador de Fechas</h3>
               <p className={`text-[11px] mb-4 ${textMuted} relative z-10`}>Selecciona una fecha para cruzar tu diagrama con el de tus compañeros.</p>
-              <input type="date" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none border ${inputBg} mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
+              <input type="date" value={targetDate} aria-label="Fecha para comparar rosters" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none border ${inputBg} mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
               
               {targetDate && (
-                <div className="space-y-2 relative z-10">
+                <div className="space-y-2 relative z-10 max-h-96 overflow-y-auto">
                   {targetStatus && (
                     <div className={`p-3 rounded-lg border flex justify-between items-center shadow-sm ${targetStatus.isWorking ? (theme==='light'?'bg-amber-50 border-amber-200':'bg-amber-500/10 border-amber-500/30') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30')}`}>
                       <span className="font-semibold text-sm flex items-center"><User size={14} className="mr-1.5 opacity-70"/> Tú</span>
-                      <span className={`text-xs font-bold px-2 py-1 rounded ${targetStatus.isWorking ? 'text-amber-600 bg-amber-500/20' : 'text-emerald-600 bg-emerald-500/20'}`}>{targetStatus.isWorking ? 'Trabajando' : 'De Franco 🎉'}</span>
+                      <span className={`text-xs font-bold px-2 py-1 rounded ${targetStatus.isWorking ? 'text-amber-600 bg-amber-500/20' : 'text-emerald-600 bg-emerald-500/20'}`}>{getCalendarDayLabel(targetStatus)}</span>
                     </div>
                   )}
                   {displayFriends.map(friend => {
                     const status = getStatusForDate(targetDate, friend);
-                    if (!status || status.error) {
+                    if (!status || status.error || friend.syncAvailable === false) {
                       return (
                         <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                           <span className="font-semibold text-sm">{friend.name}</span>
@@ -1461,11 +1444,11 @@ export default function App() {
                         </div>
                       );
                     }
-                    const isCoincidence = !targetStatus?.isWorking && !status.isWorking;
+                    const isCoincidence = isRestAvailable(targetStatus) && isRestAvailable(status);
                     return (
                       <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center transition-all ${status.isWorking ? (theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800/40 border-slate-700') : (isCoincidence ? (theme==='light'?'bg-emerald-100 border-emerald-300 shadow-md':'bg-emerald-500/20 border-emerald-500 shadow-md shadow-emerald-500/10') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30'))}`}>
                         <span className="font-semibold text-sm flex items-center">{friend.name} {isCoincidence && <Zap size={14} className="ml-1 text-yellow-500 fill-yellow-500 animate-pulse"/>}{friend.isSynced && <Share2 size={12} className="ml-1.5 text-blue-400" title="Sincronizado"/>}</span>
-                        <span className={`text-xs font-bold px-2 py-1 rounded ${status.isWorking ? 'text-slate-500' : (isCoincidence ? 'text-emerald-700 bg-emerald-400/30' : 'text-emerald-500')}`}>{status.isWorking ? 'Trabajando' : (isCoincidence ? '¡COINCIDEN!' : 'De Franco')}</span>
+                        <span className={`text-xs font-bold px-2 py-1 rounded ${status.isWorking ? 'text-slate-500' : (isCoincidence ? 'text-emerald-700 bg-emerald-400/30' : 'text-emerald-500')}`}>{isCoincidence ? '¡COINCIDEN!' : getCalendarDayLabel(status)}</span>
                       </div>
                     )
                   })}
@@ -1480,11 +1463,11 @@ export default function App() {
               </div>
               <p className={`text-[11px] mb-4 ${textMuted}`}>Calculados automáticamente con los diagramas disponibles.</p>
               {groupedCoincidences.length > 0 ? (
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-[32rem] overflow-y-auto">
                   {visibleCoincidences.map((window) => (
                     <div key={`${window.startDate}-${window.endDate}`} className={`rounded-xl border p-3 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
                       <div className="flex items-center justify-between gap-3"><p className="font-bold text-sm">{formatShortDate(window.startDate)}{window.endDate !== window.startDate ? ` — ${formatShortDate(window.endDate)}` : ''}</p><span className="text-xs font-black text-emerald-500 whitespace-nowrap">{window.days} {window.days === 1 ? 'día' : 'días'}</span></div>
-                      <div className="flex flex-wrap gap-1.5 mt-2">{window.friends.map((friend) => <span key={friend.id} className={`text-[10px] font-bold px-2 py-1 rounded-full ${theme === 'light' ? 'bg-white text-emerald-700' : 'bg-slate-950/40 text-emerald-300'}`}>{friend.name}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-2 max-h-24 overflow-y-auto">{window.friends.map((friend) => <span key={friend.id} className={`text-[10px] font-bold px-2 py-1 rounded-full ${theme === 'light' ? 'bg-white text-emerald-700' : 'bg-slate-950/40 text-emerald-300'}`}>{friend.name}</span>)}</div>
                     </div>
                   ))}
                   {groupedCoincidences.length > 3 && <button type="button" onClick={() => setShowAllCoincidences((value) => !value)} className={`w-full py-2 text-xs font-bold flex items-center justify-center ${textMuted}`}>{showAllCoincidences ? <ChevronUp size={14} className="mr-1"/> : <ChevronDown size={14} className="mr-1"/>}{showAllCoincidences ? 'Ver menos fechas' : `Ver ${groupedCoincidences.length - 3} fechas más`}</button>}
@@ -1532,7 +1515,7 @@ export default function App() {
                 {visibleFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
                     <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p></div>
-                    <button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id))} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
+                    <button onClick={() => { if (window.confirm('¿Quitar este compañero de tu lista? Esto no elimina tu código ni te quita de su equipo.')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id)), 'Compañero quitado de tu lista.'); }} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
                   </div>
                 ))}
                 {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
@@ -1544,116 +1527,23 @@ export default function App() {
         )}
 
         {/* TAB 3: PLANNER */}
-        {activeTab === 'planner' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <HeaderTitle icon={CheckSquare} title="Planificador de Franco" colorClass="text-emerald-500" theme={theme} />
+        {activeTab === 'planner' && (loaded.tasks ? <PlannerPanel
+          theme={theme} today={today} config={rosterSaved ? effectiveRoster : {}} tasks={tasks}
+          initialDate={plannedDate} onSaveTask={saveRestTask}
+          onToggleTask={(task) => savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id), { completed: !task.completed }, { merge: true }), task.completed ? 'Plan pendiente.' : 'Plan completado.')}
+          onDeleteTask={(id) => savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', id)), 'Plan eliminado.')}
+        /> : <p role="status">Cargando tus planes…</p>)}
 
-            <div className="rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-700 p-5 text-white shadow-xl shadow-emerald-900/20 relative overflow-hidden">
-              <div className="absolute -right-6 -bottom-8 opacity-10"><Umbrella size={120}/></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-100">Próximo descanso</p>
-              {!nextRestWindow ? <p className="font-bold mt-2">Configura primero tu diagrama.</p> : <><p className="text-2xl font-black mt-1">{formatShortDate(nextRestWindow.startDate)} — {formatShortDate(nextRestWindow.endDate)}</p><p className="text-sm text-emerald-100">{nextRestWindow.days} {nextRestWindow.days === 1 ? 'día disponible' : 'días disponibles'} para avanzar en lo importante.</p></>}
-              <div className="grid grid-cols-3 gap-2 mt-5 relative z-10"><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{taskSummary.open}</p><p className="text-[9px] uppercase">Pendientes</p></div><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{taskSummary.overdue}</p><p className="text-[9px] uppercase">Atrasados</p></div><div className="rounded-xl bg-white/10 p-2 text-center"><p className="text-xl font-black">{Math.round(taskSummary.minutesPending / 60)}h</p><p className="text-[9px] uppercase">Planificadas</p></div></div>
-            </div>
-
-            <form onSubmit={createRestTask} className={`rounded-2xl border p-5 space-y-3 ${cardClasses[theme]}`}>
-              <div><h3 className="font-bold">Agregar un plan</h3><p className={`text-[10px] ${textMuted}`}>Ponle fecha, prioridad y tiempo estimado para no llenar el franco de más.</p></div>
-              <input name="title" type="text" maxLength="100" placeholder="Ej. Turno médico, renovar carnet…" className={`w-full rounded-xl px-4 py-3 outline-none border ${inputBg}`} required/>
-              <div className="grid grid-cols-2 gap-2">
-                <input name="date" type="date" defaultValue={nextRestWindow?.startDate || getTodayDate()} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/>
-                <select name="category" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}>{Object.entries(TASK_CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                <select name="priority" defaultValue="medium" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="high">Prioridad alta</option><option value="medium">Prioridad media</option><option value="low">Prioridad baja</option></select>
-                <select name="estimatedMinutes" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="30">30 minutos</option><option value="60">1 hora</option><option value="120">2 horas</option><option value="240">4 horas</option><option value="480">1 día</option></select>
-              </div>
-              <button className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-white shadow-lg shadow-emerald-500/20"><Plus size={17} className="inline mr-1"/> Agregar al franco</button>
-            </form>
-
-            <div>
-              <div className="flex gap-2 mb-3">{[['open', 'Pendientes'], ['done', 'Hechos'], ['all', 'Todos']].map(([value, label]) => <button key={value} type="button" onClick={() => setTaskFilter(value)} className={`rounded-full px-3 py-1.5 text-xs font-bold border ${taskFilter === value ? 'bg-emerald-500 border-emerald-500 text-white' : inputBg}`}>{label}</button>)}</div>
-              <div className="space-y-3">
-                {visibleTasks.length === 0 && <div className={`rounded-2xl border p-6 text-center ${cardClasses[theme]}`}><CheckCircle2 size={28} className="mx-auto text-emerald-500 mb-2"/><p className="font-bold">Nada pendiente en esta vista</p><p className={`text-xs mt-1 ${textMuted}`}>Tu franco queda libre para descansar o agregar un objetivo.</p></div>}
-                {visibleTasks.map(task => (
-                  <div key={task.id} className={`rounded-2xl border p-4 transition-all ${task.completed ? 'opacity-60' : ''} ${cardClasses[theme]}`}>
-                    <div className="flex items-start gap-3"><button type="button" onClick={() => toggleTask(task)} className={`mt-0.5 flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center ${task.completed ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400'}`}>{task.completed && <CheckSquare size={14} className="text-white"/>}</button><div className="min-w-0 flex-1"><p className={`font-bold ${task.completed ? 'line-through' : ''}`}>{task.title}</p><div className={`flex flex-wrap gap-x-3 gap-y-1 text-[10px] mt-1 ${textMuted}`}><span><Calendar size={11} className="inline mr-1"/>{task.date ? formatShortDate(task.date) : 'Sin fecha'}</span><span>{TASK_CATEGORY_LABELS[task.category] || 'Personal'}</span>{Number(task.estimatedMinutes) > 0 && <span><Clock size={11} className="inline mr-1"/>{task.estimatedMinutes} min</span>}</div></div><button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks', task.id))} className="p-2 text-slate-400 hover:text-red-400" aria-label={`Eliminar ${task.title}`}><Trash2 size={16}/></button></div>
-                    {!task.completed && task.priority === 'high' && <span className="mt-3 inline-block rounded-full bg-red-500/10 px-2 py-1 text-[9px] font-black uppercase text-red-400">Prioridad alta</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 4: WEALTH */}
+        {/* TAB 4: FINANZAS */}
         {activeTab === 'wealth' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <HeaderTitle icon={TrendingUp} title="Finanzas" colorClass="text-emerald-500" theme={theme} />
-
-            <div className="rounded-3xl bg-gradient-to-br from-slate-900 to-emerald-950 border border-emerald-500/30 p-5 text-white shadow-xl relative overflow-hidden">
-              <div className="absolute -right-5 -top-4 opacity-10"><WalletCards size={110}/></div>
-              <p className="text-[10px] uppercase font-black tracking-widest text-emerald-300">Disponible este mes</p><p className={`text-3xl font-black mt-1 ${budgetSummary.remaining < 0 ? 'text-red-400' : 'text-white'}`}>{formatAmount(budgetSummary.remaining, financeSettings.currency)}</p>
-              <div className="grid grid-cols-3 gap-2 mt-5 relative z-10"><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Ahorrás</p><p className="font-black">{budgetSummary.savingsRate.toFixed(0)}%</p></div><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Gastos</p><p className="font-black truncate">{formatAmount(budgetSummary.variableSpent, financeSettings.currency)}</p></div><div className="rounded-xl bg-white/5 p-2"><p className="text-[9px] text-slate-400">Por día franco</p><p className="font-black truncate">{formatAmount(budgetSummary.dailyRestBudget, financeSettings.currency)}</p></div></div>
-            </div>
-
-            <form onSubmit={saveFinancePlan} className={`rounded-2xl border p-5 space-y-3 ${cardClasses[theme]}`}>
-              <div><h3 className="font-bold flex items-center"><PiggyBank size={18} className="mr-2 text-emerald-500"/> Plan mensual</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Separa primero gastos fijos y ahorro; RosterMax calcula cuánto queda para tus días de descanso.</p></div>
-              <div className="grid grid-cols-2 gap-2"><input name="monthlyIncome" type="number" min="0" step="0.01" defaultValue={financeSettings.monthlyIncome} placeholder="Ingreso mensual" aria-label="Ingreso mensual" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><select name="currency" defaultValue={financeSettings.currency} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="ARS">Pesos (ARS)</option><option value="USD">Dólares (USD)</option></select><input name="fixedCosts" type="number" min="0" step="0.01" defaultValue={financeSettings.fixedCosts} placeholder="Gastos fijos" aria-label="Gastos fijos" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="plannedSavings" type="number" min="0" step="0.01" defaultValue={financeSettings.plannedSavings} placeholder="Ahorro mensual" aria-label="Ahorro mensual" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/></div>
-              <button className="w-full rounded-xl bg-emerald-500 py-2.5 text-sm font-bold text-white">Guardar presupuesto</button>
-            </form>
-
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold flex items-center"><Receipt size={18} className="mr-2 text-blue-500"/> Gastos del mes</h3>
-              <form onSubmit={addExpense} className="mt-3 space-y-2"><div className="grid grid-cols-2 gap-2"><input name="amount" type="number" min="0.01" step="0.01" placeholder="Monto" aria-label="Monto del gasto" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><select name="category" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}><option value="comida">Comida</option><option value="transporte">Transporte</option><option value="familia">Familia</option><option value="ocio">Ocio</option><option value="otros">Otros</option></select><input name="date" type="date" defaultValue={getTodayDate()} className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><input name="note" type="text" maxLength="80" placeholder="Nota opcional" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`}/></div><button className="w-full rounded-xl border border-blue-500/30 py-2 text-xs font-bold text-blue-500">Registrar gasto</button></form>
-              {expenses.length > 0 && <div className="mt-4 space-y-2 max-h-48 overflow-y-auto pr-1">{expenses.slice(0, 10).map((expense) => <div key={expense.id} className={`flex items-center justify-between rounded-xl p-3 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div className="min-w-0"><p className="text-xs font-bold truncate">{expense.note || expense.category}</p><p className={`text-[9px] ${textMuted}`}>{formatShortDate(expense.date)} · {expense.category}</p></div><div className="flex items-center gap-2"><span className="text-xs font-black text-red-400">− {formatAmount(expense.amount, financeSettings.currency)}</span><button type="button" onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses', expense.id))} className="text-slate-400 hover:text-red-400"><X size={14}/></button></div></div>)}</div>}
-            </div>
-
-            <div className="space-y-4"><h3 className="font-bold flex items-center"><Target size={18} className="mr-2 text-indigo-500"/> Metas de ahorro</h3>
-                <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-                  <form onSubmit={createFinancialGoal} className="space-y-3">
-                    <div className="flex space-x-2">
-                      <input name="title" type="text" placeholder="Ej. Cambio de auto" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                      <select name="currency" defaultValue={financeSettings.currency} className={`w-20 rounded-xl px-2 py-2 text-sm outline-none border ${inputBg}`}>
-                        <option value="USD">USD</option><option value="ARS">ARS</option>
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input name="target" type="number" min="0.01" step="0.01" placeholder="Monto objetivo" aria-label="Monto objetivo" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                      <input name="monthlyPlan" type="number" min="0" step="0.01" placeholder="Aporte mensual (opcional)" aria-label="Aporte mensual planificado" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} />
-                    </div>
-                    <button type="submit" className="w-full bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 font-bold py-2.5 rounded-xl border border-emerald-500/20 transition-colors">Crear Meta Financiera</button>
-                  </form>
-                </div>
-                <div className="space-y-4">
-                  {goals.map(goal => {
-                    const projection = getGoalProjection(goal);
-                    const progress = projection?.progress || 0;
-                    const isUSD = goal.currency === 'USD';
-                    return (
-                      <div key={goal.id} className={`rounded-2xl border p-5 ${cardClasses[theme]} relative overflow-hidden group`}>
-                        {progress >= 100 && <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg flex items-center z-10"><Award size={12} className="mr-1"/> LOGRADO</div>}
-                        <div className="flex justify-between items-center mb-3"><span className="font-bold relative z-10 flex items-center">{goal.title} <span className="ml-2 text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">{goal.currency || 'USD'}</span></span><button onClick={() => deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'goals', goal.id))} className="text-slate-400 hover:text-red-400 opacity-70 transition-opacity relative z-10" aria-label={`Eliminar meta ${goal.title}`}><Trash2 size={14}/></button></div>
-                        <div className="flex items-end justify-between mb-2 relative z-10"><div className="flex items-baseline space-x-1"><span className="text-2xl font-black">{formatAmount(goal.current, goal.currency)}</span><span className={`text-xs ${textMuted}`}>/ {formatAmount(goal.target, goal.currency)}</span></div><span className="text-xs font-bold text-emerald-500">{progress.toFixed(0)}%</span></div>
-                        <div className={`h-2.5 w-full rounded-full overflow-hidden relative z-10 ${theme === 'light' ? 'bg-slate-200' : 'bg-slate-800'}`}><div className="h-full bg-emerald-500 rounded-full transition-all duration-1000 ease-out" style={{ width: `${Math.min(progress, 100)}%` }}></div></div>
-                        {projection?.monthsRemaining !== null && progress < 100 && (
-                          <p className={`mt-2 text-[10px] ${textMuted}`}>Plan: {formatAmount(projection.monthlyPlan, goal.currency)} al mes · aproximadamente {projection.monthsRemaining} {projection.monthsRemaining === 1 ? 'mes' : 'meses'}.</p>
-                        )}
-                        {progress < 100 && (
-                          <div className="mt-4 space-y-2 relative z-10">
-                            <form onSubmit={async (event) => { event.preventDefault(); const formElement = event.currentTarget; const saved = await addFunds(goal, new FormData(formElement).get('amount')); if (saved) formElement.reset(); }} className="flex gap-2">
-                              <input name="amount" type="number" min="0.01" step="0.01" placeholder="Registrar aporte" aria-label={`Aporte para ${goal.title}`} className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-xs outline-none border ${inputBg}`} required/>
-                              <button className="bg-emerald-500 text-white px-3 rounded-lg text-xs font-bold">Aportar</button>
-                            </form>
-                            <div className="flex space-x-2">
-                              <button onClick={() => addFunds(goal, isUSD ? 100 : 10000)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ {isUSD ? 'USD 100' : 'ARS 10k'}</button>
-                              <button onClick={() => addFunds(goal, goal.monthlyPlan || (isUSD ? 1000 : 100000))} className={`flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors ${theme === 'light' ? 'bg-white border-emerald-200 text-emerald-600' : 'bg-slate-900 border-emerald-500/30 text-emerald-400'}`}>+ plan mensual</button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            <div className={`rounded-xl border px-4 py-3 text-[10px] leading-relaxed ${theme === 'light' ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-amber-500/10 border-amber-500/20 text-amber-200'}`}>RosterMax te ayuda a ordenar tu presupuesto y tus metas. No brinda recomendaciones de inversión ni reemplaza asesoramiento financiero profesional.</div>
-          </div>
+          loaded.finance && loaded.goals && loaded.expenses ? <FinancePanel
+            theme={theme} today={today} config={rosterSaved ? effectiveRoster : {}}
+            settings={financeSettings} expenses={expenses} goals={goals}
+            onSaveSettings={saveFinancePlan} onAddExpense={addExpense}
+            onDeleteExpense={(id) => savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'expenses', id)), 'Gasto eliminado.')}
+            onCreateGoal={createFinancialGoal} onAddFunds={addFunds}
+            onDeleteGoal={(id) => savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'goals', id)), 'Meta eliminada.')}
+          /> : <p role="status">Cargando tu presupuesto…</p>
         )}
 
         {/* TAB 5: SETTINGS */}
@@ -1661,7 +1551,7 @@ export default function App() {
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
             
             <div className="flex justify-between items-center mb-6">
-              <HeaderTitle icon={Settings} title="Ajustes" colorClass="text-slate-400" theme={theme} />
+              <HeaderTitle icon={Settings} title={`Ajustes · ${APP_VERSION}`} colorClass="text-slate-400" theme={theme} />
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
             
@@ -1733,8 +1623,8 @@ export default function App() {
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className={`h-10 w-10 rounded-xl flex-shrink-0 flex items-center justify-center ${privacySettings.analyticsEnabled ? 'bg-blue-500/15 text-blue-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}><Activity size={19}/></div><div><h3 className="font-bold text-sm">Ayudar a mejorar RosterMax</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Comparte métricas técnicas y agregadas de uso. Nunca enviamos nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.</p></div></div><button type="button" role="switch" aria-checked={privacySettings.analyticsEnabled} onClick={toggleAnalytics} className={`w-12 h-7 rounded-full p-1 flex-shrink-0 transition-colors ${privacySettings.analyticsEnabled ? 'bg-blue-500 justify-end' : 'bg-slate-600 justify-start'}`}><span className="block h-5 w-5 rounded-full bg-white shadow"/></button></div>
-              <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Puedes apagarlo cuando quieras y eliminaremos tu registro de medición.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
+              <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className={`h-10 w-10 rounded-xl flex-shrink-0 flex items-center justify-center ${privacySettings.analyticsEnabled ? 'bg-blue-500/15 text-blue-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}><Activity size={19}/></div><div><h3 className="font-bold text-sm">Ayudar a mejorar RosterMax</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Medición opcional vinculada a un identificador de cuenta. El panel muestra resultados agregados, sin nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.</p></div></div><button type="button" role="switch" aria-checked={privacySettings.analyticsEnabled} onClick={toggleAnalytics} className={`w-12 h-7 rounded-full p-1 flex-shrink-0 transition-colors ${privacySettings.analyticsEnabled ? 'bg-blue-500 justify-end' : 'bg-slate-600 justify-start'}`}><span className="block h-5 w-5 rounded-full bg-white shadow"/></button></div>
+              <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Al apagarlo borramos tu registro de actividad y dejamos de medir. Los conteos publicitarios anteriores se conservan asociados a tu identificador.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
             </div>
 
             <button type="button" onClick={reopenOnboarding} className={`w-full rounded-2xl border p-4 flex items-center justify-between text-left ${cardClasses[theme]}`}>
@@ -1847,14 +1737,14 @@ export default function App() {
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-start justify-between"><div><h3 className="font-bold flex items-center"><BarChart3 size={18} className="mr-2 text-blue-500"/> Audiencia medible</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Datos propios de usuarios que aceptaron métricas. No son descargas de tienda ni incluyen información personal.</p></div><span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">OPT-IN</span></div>
+              <div className="flex items-start justify-between"><div><h3 className="font-bold flex items-center"><BarChart3 size={18} className="mr-2 text-blue-500"/> Audiencia medible</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Muestra voluntaria de cuentas, no el total de personas ni descargas. Usa identificadores seudónimos; no incluye el contenido privado del trabajador.</p></div><span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">OPT-IN</span></div>
               <div className="grid grid-cols-2 gap-2 mt-4">
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-blue-50' : 'bg-blue-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Usuarios medidos</p><p className="text-2xl font-black text-blue-500">{audienceSummary.measuredUsers}</p></div>
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-blue-50' : 'bg-blue-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Cuentas medidas</p><p className="text-2xl font-black text-blue-500">{audienceSummary.measuredUsers}</p></div>
                 <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-emerald-50' : 'bg-emerald-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 30 días</p><p className="text-2xl font-black text-emerald-500">{audienceSummary.activeMonth}</p></div>
                 <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-indigo-50' : 'bg-indigo-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 7 días</p><p className="text-2xl font-black text-indigo-500">{audienceSummary.activeWeek}</p></div>
                 <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 24 horas</p><p className="text-2xl font-black text-amber-500">{audienceSummary.activeDay}</p></div>
               </div>
-              <div className={`grid grid-cols-3 gap-2 mt-2 text-center ${textMuted}`}><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.linkedAccounts}</p><p className="text-[8px] uppercase">Cuentas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.installsDetected}</p><p className="text-[8px] uppercase">Instaladas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.configuredRosters}</p><p className="text-[8px] uppercase">Configuradas</p></div></div>
+              <div className={`grid grid-cols-3 gap-2 mt-2 text-center ${textMuted}`}><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.linkedAccounts}</p><p className="text-[8px] uppercase">Cuentas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.installsDetected}</p><p className="text-[8px] uppercase">PWA detectada</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.configuredRosters}</p><p className="text-[8px] uppercase">Configuradas</p></div></div>
             </div>
 
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
@@ -1877,14 +1767,14 @@ export default function App() {
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold mb-4">Campañas</h3>
+              <h3 className="font-bold mb-2">Campañas</h3><p className={`text-[10px] mb-4 ${textMuted}`}>Eventos enviados desde la app por cuentas que aceptaron medir. Alcance = cuentas con vistas, no personas verificadas. Datos orientativos, sin auditoría antifraude.</p>
               {ads.length === 0 ? <p className={`text-xs ${textMuted}`}>Todavía no creaste campañas.</p> : (
                 <div className="space-y-3">
                   {ads.map((ad) => {
                     const metrics = getCampaignSummary(ad.id, campaignMetrics);
                     return <div key={ad.id} className={`rounded-xl border p-4 ${ad.active ? 'border-emerald-500/30' : theme === 'light' ? 'border-slate-200 opacity-60' : 'border-slate-700 opacity-60'}`}>
                       <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-bold truncate">{ad.title}</p><p className={`text-[10px] ${textMuted}`}>{ad.company} · {ad.location}</p><p className={`text-[10px] mt-1 ${textMuted}`}>{ad.startDate || 'Sin fecha'} — {ad.endDate || 'Sin fecha'}</p></div><span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${ad.active ? 'bg-emerald-500/15 text-emerald-500' : 'bg-slate-500/15 text-slate-500'}`}>{ad.active ? 'Activa' : 'Pausada'}</span></div>
-                      <div className={`grid grid-cols-4 gap-1 mt-3 rounded-xl p-2 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div><p className="text-xs font-black">{metrics.reach}</p><p className={`text-[8px] ${textMuted}`}>Alcance</p></div><div><p className="text-xs font-black">{metrics.impressions}</p><p className={`text-[8px] ${textMuted}`}>Vistas</p></div><div><p className="text-xs font-black">{metrics.clicks}</p><p className={`text-[8px] ${textMuted}`}>Clics</p></div><div><p className="text-xs font-black">{metrics.ctr.toFixed(1)}%</p><p className={`text-[8px] ${textMuted}`}>CTR</p></div></div>
+                      <div className={`grid grid-cols-4 gap-1 mt-3 rounded-xl p-2 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div><p className="text-xs font-black">{metrics.reach}</p><p className={`text-[8px] ${textMuted}`}>Cuentas</p></div><div><p className="text-xs font-black">{metrics.impressions}</p><p className={`text-[8px] ${textMuted}`}>Vistas</p></div><div><p className="text-xs font-black">{metrics.clicks}</p><p className={`text-[8px] ${textMuted}`}>Clics</p></div><div><p className="text-xs font-black">{metrics.ctr.toFixed(1)}%</p><p className={`text-[8px] ${textMuted}`}>CTR</p></div></div>
                       {ad.active && <button type="button" onClick={() => pauseAd(ad.id)} className="mt-3 w-full rounded-lg border border-red-500/20 text-red-400 py-2 text-xs font-bold flex items-center justify-center"><PauseCircle size={14} className="mr-1.5"/> Pausar campaña</button>}
                     </div>;
                   })}
@@ -1911,7 +1801,7 @@ export default function App() {
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">
           <button onClick={() => setActiveTab('roster')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'roster' ? 'text-emerald-500' : textMuted}`}><Calendar size={20} /><span className="text-[9px] font-bold">Roster</span></button>
           <button onClick={() => setActiveTab('crew')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'crew' ? 'text-blue-500' : textMuted}`}><Users size={20} /><span className="text-[9px] font-bold">Equipo</span></button>
-          <button onClick={() => setActiveTab('planner')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'planner' ? 'text-emerald-500' : textMuted}`}><CheckSquare size={20} /><span className="text-[9px] font-bold">Franco</span></button>
+          <button onClick={() => { setPlannedDate(''); setActiveTab('planner'); }} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'planner' ? 'text-emerald-500' : textMuted}`}><CheckSquare size={20} /><span className="text-[9px] font-bold">Franco</span></button>
           <button onClick={() => setActiveTab('wealth')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'wealth' ? 'text-emerald-500' : textMuted}`}><TrendingUp size={20} /><span className="text-[9px] font-bold">Finanzas</span></button>
           <button onClick={() => setActiveTab('settings')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'settings' ? 'text-emerald-500' : textMuted}`}><Settings size={20} /><span className="text-[9px] font-bold">Ajustes</span></button>
           

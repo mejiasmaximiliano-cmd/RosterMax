@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { decodeSharedExceptions } from '../src/lib/sharedSchedule.js';
 import {
   getNextTransition,
   getStatusForDate,
+  isRestAvailable,
   sanitizeSharedExceptions,
   validateRosterConfig,
   validateScheduleException,
@@ -78,5 +80,35 @@ test('valida solapamientos y elimina motivos privados al compartir', () => {
   const existing = [{ id: 'one', startDate: '2026-09-01', endDate: '2026-09-07' }];
   assert.equal(validateScheduleException({ type: 'medical', startDate: '2026-09-05', endDate: '2026-09-08' }, existing).valid, false);
   const shared = sanitizeSharedExceptions([{ type: 'medical', label: 'Diagnóstico privado', startDate: '2026-09-10', endDate: '2026-09-12' }]);
-  assert.deepEqual(shared, [{ type: 'medical', mode: 'rest', startDate: '2026-09-10', endDate: '2026-09-12' }]);
+  assert.deepEqual(decodeSharedExceptions(shared), [{ type: 'unavailable', mode: 'rest', startDate: '2026-09-10', endDate: '2026-09-12' }]);
+  assert.equal(shared.every((item) => typeof item === 'string'), true);
+});
+
+test('una carpeta médica no se convierte en un franco al compartirla', () => {
+  const exceptions = [{ type: 'medical', label: 'Motivo reservado', startDate: '2026-08-10', endDate: '2026-08-12' }];
+  const ownStatus = getStatusForDate('2026-08-11', { ...roster14x14, exceptions });
+  const sharedStatus = getStatusForDate('2026-08-11', { ...roster14x14, exceptions: sanitizeSharedExceptions(exceptions) });
+  assert.equal(ownStatus.isWorking, false);
+  assert.equal(isRestAvailable(ownStatus), false);
+  assert.equal(isRestAvailable(sharedStatus), false);
+  assert.equal(sharedStatus.exceptionLabel, 'No disponible');
+  assert.equal(isRestAvailable(getStatusForDate('2026-08-21', roster14x14)), true);
+  assert.equal(isRestAvailable({ error: 'Fecha inválida' }), false);
+});
+
+test('vacaciones siguen disponibles sin revelar el tipo de ausencia al equipo', () => {
+  const shared = sanitizeSharedExceptions([{ type: 'vacation', label: 'Viaje privado', startDate: '2026-08-10', endDate: '2026-08-12' }]);
+  assert.equal(decodeSharedExceptions(shared)[0].type, 'rest_override');
+  assert.equal(isRestAvailable(getStatusForDate('2026-08-11', { ...roster14x14, exceptions: shared })), true);
+});
+
+test('rechaza cambios superpuestos aunque los anteriores no tengan id', () => {
+  assert.equal(validateScheduleException({ type: 'leave', startDate: '2026-09-01', endDate: '2026-09-03' }, [{ startDate: '2026-09-02', endDate: '2026-09-04' }]).valid, false);
+});
+
+test('limita nuevos cambios a 30 y permite editar uno existente', () => {
+  const existing = Array.from({ length: 30 }, (_, index) => ({ id: String(index), startDate: '2026-01-01', endDate: '2026-01-01' }));
+  const input = { type: 'leave', startDate: '2026-09-01', endDate: '2026-09-03' };
+  assert.equal(validateScheduleException(input, existing).valid, false);
+  assert.equal(validateScheduleException({ ...input, id: '0' }, existing).valid, true);
 });

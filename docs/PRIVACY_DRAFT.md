@@ -35,7 +35,7 @@ RosterMax no publica un directorio de trabajadores. Al compartir un código, otr
 - nombre visible;
 - días de trabajo y descanso;
 - fecha de inicio del ciclo.
-- tipo y fechas de cambios temporales que alteran la disponibilidad; el motivo o nota privada no se comparte.
+- fechas y disponibilidad de cambios temporales; un estado genérico de ausencia reemplaza los tipos médicos y permisos. El diagnóstico, tipo de licencia y nota privada no se comparten. Las vacaciones se presentan como disponibilidad de descanso.
 
 No se incluyen correo, empresa, provincias, tareas, metas ni bitácoras.
 
@@ -57,7 +57,13 @@ Antes de incorporar pagos o nuevos proveedores, esta política debe actualizarse
 
 La medición está desactivada por defecto. Si el usuario la activa, RosterMax registra un identificador técnico, actividad reciente, tipo de cuenta, detección de instalación, configuración del roster e interacciones con campañas. No incluye nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.
 
-El panel administrativo presenta cantidades agregadas de usuarios activos, alcance, impresiones, clics y CTR. Al desactivar la medición, la aplicación elimina el registro técnico de actividad del usuario; los contadores históricos de campañas pueden conservarse de forma agregada para informes comerciales.
+Los registros de medición están asociados al UID de Firebase: son seudónimos, no anónimos. El panel administrativo presenta cantidades agregadas de cuentas de la muestra voluntaria, actividad, alcance, impresiones, clics y CTR. No representan necesariamente personas únicas, todas las cuentas ni descargas verificadas. Al desactivar la medición, la aplicación elimina el registro técnico de actividad del usuario y deja de registrar nuevos eventos; los contadores históricos de campañas permanecen asociados al identificador de cuenta. El panel muestra sus sumas, pero eso no anonimiza los registros almacenados.
+
+## Datos guardados en el dispositivo
+
+La aplicación conserva una copia local de los datos consultados para permitir el uso sin conexión y poner cambios privados en cola. Cerrar sesión cambia la cuenta visible pero no borra automáticamente todo el almacenamiento del navegador. Evita usar un dispositivo compartido para guardar información médica o financiera. Borrar los datos del sitio puede eliminar cambios todavía no sincronizados y el acceso de una cuenta de invitado.
+
+El archivo de calendario exportado es una copia estática de disponibilidad, sin notas privadas ni motivos médicos. No se actualiza ni se elimina automáticamente de otros calendarios.
 
 ## Publicidad
 

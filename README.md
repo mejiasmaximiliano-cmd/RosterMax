@@ -28,7 +28,7 @@ La aplicación está preparada para una beta cerrada. Actualmente incorpora:
 
 ## Desarrollo
 
-Requiere Node.js 20 o superior.
+Requiere Node.js 22.12 o superior. La beta 0.5 añade calendario mensual exportable, planes editables, presupuestos por mes/moneda, caché privada persistente y pruebas con Firebase local. Ver [notas de la versión](docs/BETA_0_5.md).
 
 ```bash
 npm ci
@@ -42,6 +42,8 @@ npm test
 npm run lint
 npm run build
 ```
+
+Las pruebas unitarias no se conectan a producción. Las pruebas de reglas se omiten sin `FIRESTORE_EMULATOR_HOST`. Para ejecutar reglas e interfaz móvil con datos ficticios, consultar [pruebas locales](docs/BETA_0_5.md#pruebas-locales).
 
 ## Firebase
 

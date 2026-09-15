@@ -1,4 +1,4 @@
-import { addDaysToDate, getStatusForDate, validateRosterConfig } from './roster.js';
+import { addDaysToDate, getStatusForDate, isRestAvailable, validateRosterConfig } from './roster.js';
 
 function closeWindow(windows, current, friend) {
   if (!current) return;
@@ -18,16 +18,15 @@ export function findRestCoincidences(startDate, ownConfig, friends, options = {}
   if (!addDaysToDate(startDate, 0) || !validateRosterConfig(ownConfig).valid) return [];
 
   const windows = [];
+  const dates = Array.from({ length: Math.max(0, Math.min(732, horizonDays)) }, (_, offset) => addDaysToDate(startDate, offset));
+  const ownRest = new Map(dates.map((date) => [date, isRestAvailable(getStatusForDate(date, ownConfig))]));
   for (const friend of friends || []) {
     if (!validateRosterConfig(friend).valid) continue;
 
     let current = null;
-    for (let offset = 0; offset < horizonDays; offset += 1) {
-      const date = addDaysToDate(startDate, offset);
-      const ownStatus = getStatusForDate(date, ownConfig);
+    for (const date of dates) {
       const friendStatus = getStatusForDate(date, friend);
-      const coincide = !ownStatus.error && !friendStatus.error
-        && !ownStatus.isWorking && !friendStatus.isWorking;
+      const coincide = ownRest.get(date) && isRestAvailable(friendStatus);
 
       if (coincide) {
         current = current
