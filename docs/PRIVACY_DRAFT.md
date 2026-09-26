@@ -45,6 +45,8 @@ Los enlaces de invitación contienen el mismo código privado. El destinatario v
 
 Las alertas del sistema se activan únicamente después de que el usuario concede permiso en su dispositivo. En la versión actual se calculan localmente cuando se abre RosterMax; no se envían mediante un servicio Push con la aplicación cerrada.
 
+Para planes y metas de ahorro, el usuario puede preparar un evento en Google Calendar o descargar un archivo de calendario con aviso. Debe guardarlo/importarlo y confirmar sus notificaciones. El calendario del teléfono, no RosterMax, gestiona ese aviso. Se usa un título genérico por defecto; incluir el nombre del plan o meta es opcional y puede hacerlo visible en calendarios compartidos o la pantalla bloqueada. Nunca se exportan montos ni saldos. El evento es una copia independiente: cambiar, completar o eliminar el plan/meta en RosterMax no modifica ni cancela el evento del calendario.
+
 ## Proveedores
 
 - Firebase procesa autenticación y almacenamiento en la nube.
@@ -58,6 +60,8 @@ Antes de incorporar pagos o nuevos proveedores, esta política debe actualizarse
 La medición está desactivada por defecto. Si el usuario la activa, RosterMax registra un identificador técnico, actividad reciente, tipo de cuenta, detección de instalación, configuración del roster e interacciones con campañas. No incluye nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.
 
 Los registros de medición están asociados al UID de Firebase: son seudónimos, no anónimos. El panel administrativo presenta cantidades agregadas de cuentas de la muestra voluntaria, actividad, alcance, impresiones, clics y CTR. No representan necesariamente personas únicas, todas las cuentas ni descargas verificadas. Al desactivar la medición, la aplicación elimina el registro técnico de actividad del usuario y deja de registrar nuevos eventos; los contadores históricos de campañas permanecen asociados al identificador de cuenta. El panel muestra sus sumas, pero eso no anonimiza los registros almacenados.
+
+Separadamente, el propietario puede consultar un censo operativo de cuentas existentes en Firebase Authentication. El panel privado guarda únicamente totales de cuentas vinculadas, invitadas, deshabilitadas, altas y accesos de autenticación, junto con la fecha del censo. No guarda un listado de identidades ni credenciales. Este censo no habilita la medición opcional, no representa instalaciones únicas y no permite deducir cuántas personas abren la app diariamente. La actividad voluntaria se actualiza cuando la aplicación está visible, como máximo una vez cada 15 minutos mientras permanece abierta y sin cambios de configuración.
 
 ## Datos guardados en el dispositivo
 

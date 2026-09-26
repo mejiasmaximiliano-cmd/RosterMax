@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'rostermax-';
-const CACHE_NAME = `${CACHE_PREFIX}v5`;
+const CACHE_NAME = `${CACHE_PREFIX}v6`;
 const APP_SHELL = ['/', '/manifest.json', '/logo.svg', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {

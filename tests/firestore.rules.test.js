@@ -108,6 +108,28 @@ describe('reglas reales de Firestore (emulador local)', { skip: !emulatorHost },
     await assertSucceeds(deleteDoc(ref));
   });
 
+  it('restringe censo agregado al CEO con esquema cerrado y fecha de servidor', async () => {
+    const path = `artifacts/${APP}/admin_stats/accounts`;
+    const census = {
+      schemaVersion: 1, source: 'firebase-auth', projectId: 'rostermax-60242', generatedAt: serverTimestamp(),
+      totalAccounts: 4, registeredAccounts: 3, guestAccounts: 1, googleAccounts: 3, disabledAccounts: 0,
+      createdLast7Days: 1, createdLast30Days: 2, signInsLast24Hours: 1, signInsLast7Days: 2, signInsLast30Days: 3,
+    };
+    await assertSucceeds(getDoc(doc(admin, path)));
+    await assertFails(getDoc(doc(alice, path)));
+    await assertFails(setDoc(doc(alice, path), census));
+    await assertSucceeds(setDoc(doc(admin, path), census));
+    await assertSucceeds(getDoc(doc(admin, path)));
+    await assertFails(getDoc(doc(alice, path)));
+    await assertFails(getDocs(collection(admin, `artifacts/${APP}/admin_stats`)));
+    for (const change of [
+      { registeredAccounts: 2 }, { googleAccounts: 4 }, { disabledAccounts: -1 },
+      { signInsLast7Days: 4 }, { createdLast7Days: 3 }, { source: 'client-guess' },
+      { projectId: 'different-project' }, { identities: ['private'] }, { generatedAt: Timestamp.fromMillis(1) },
+    ]) await assertFails(setDoc(doc(admin, path), { ...census, ...change }));
+    await assertFails(deleteDoc(doc(admin, path)));
+  });
+
   it('registra la primera impresión mediante una transacción que lee un documento inexistente', async () => {
     const ref = doc(alice, publicPath('campaign_metrics/campaign_alice'));
     await assertSucceeds(getDoc(ref));

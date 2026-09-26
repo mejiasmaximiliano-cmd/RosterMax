@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { ArrowDownLeft, Check, ChevronDown, PiggyBank, Plus, Receipt, Search, Target, Trash2, WalletCards } from 'lucide-react';
 import { getBudgetPlanForMonth, getExpenseCurrency, getGoalProjection, getMonthlyBudgetSummary } from '../lib/finance';
 import { parseDateOnly } from '../lib/roster';
+import ReminderEditor from './ReminderEditor';
 
 const CATEGORIES = { comida: 'Comida', transporte: 'Transporte', familia: 'Familia', salud: 'Salud', hogar: 'Hogar', ocio: 'Ocio', otros: 'Otros' };
 const CURRENCIES = { ARS: 'Pesos argentinos · ARS', USD: 'Dólares · USD' };
@@ -28,7 +29,7 @@ function Field({ label, children, hint }) {
   return <label className="block min-w-0"><span className="mb-1.5 block text-xs font-semibold">{label}</span>{children}{hint && <span className="mt-1 block text-xs opacity-70">{hint}</span>}</label>;
 }
 
-function GoalCard({ goal, styles, pending, onContribute, onDelete }) {
+function GoalCard({ goal, styles, pending, onContribute, onDelete, theme, today }) {
   const projection = getGoalProjection(goal);
   const currency = goal.currency || 'USD';
   return <article className={`rounded-2xl border p-4 ${styles.surface}`}>
@@ -46,6 +47,7 @@ function GoalCard({ goal, styles, pending, onContribute, onDelete }) {
         <Field label={`Registrar aporte (${currency})`}><input name="amount" type="number" min="0.01" max={projection.remaining} step="0.01" inputMode="decimal" required disabled={Boolean(pending)} className={styles.input} placeholder="0,00"/></Field>
         <button type="submit" disabled={Boolean(pending)} className={`flex min-h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold ${styles.secondary}`}><Plus size={16}/>{pending === `goal-funds-${goal.id}` ? 'Guardando…' : 'Registrar aporte'}</button>
       </form>}
+      {projection.remaining > 0 && <ReminderEditor kind="goal" item={goal} today={today} theme={theme}/>}
     </> : <p className="mt-3 text-sm text-amber-500">Esta meta tiene un monto objetivo inválido.</p>}
   </article>;
 }
@@ -195,7 +197,8 @@ export default function FinancePanel({ theme = 'dark', today, config, settings =
     <section className="space-y-3" aria-labelledby="goals-heading">
       <div><h3 id="goals-heading" className="flex items-center gap-2 text-lg font-bold"><Target size={21} className="text-emerald-500"/>Metas que te motivan</h3><p className={`mt-1 text-xs leading-relaxed ${styles.muted}`}>Registra el dinero que ya separaste para cada meta. Los aportes son un seguimiento independiente: no descuentan gastos ni mueven dinero de tu cuenta.</p></div>
       <details className={`rounded-2xl border p-4 ${styles.surface}`}><summary className="min-h-7 cursor-pointer text-sm font-bold">Crear una meta de ahorro</summary><form onSubmit={createGoal} className="mt-4 space-y-3"><Field label="Nombre de la meta"><input name="title" required maxLength={80} className={styles.input} placeholder="Fondo de emergencia, vacaciones…"/></Field><div className="grid gap-3 min-[360px]:grid-cols-2"><Field label="Moneda de la meta"><select name="currency" defaultValue={currency} className={styles.input}>{Object.entries(CURRENCIES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="Monto objetivo"><input name="target" type="number" min="0.01" max="1000000000000" step="0.01" inputMode="decimal" required className={styles.input} placeholder="0,00"/></Field></div><Field label="Aporte mensual previsto" hint="Es una intención, no un aporte automático. Usa 0 si todavía no lo definiste."><input name="monthlyPlan" type="number" min="0" max="1000000000000" step="0.01" inputMode="decimal" required defaultValue={0} className={styles.input}/></Field><button type="submit" disabled={Boolean(pending)} className={primaryButton}><Plus size={17}/>{pending === 'goal' ? 'Guardando…' : 'Crear meta'}</button></form></details>
-      {goals.length === 0 ? <div className={`rounded-2xl border p-6 text-center ${styles.surface}`}><PiggyBank size={30} className="mx-auto text-emerald-500"/><p className="mt-3 text-sm font-bold">Dale un destino a tu esfuerzo</p><p className={`mt-1 text-xs ${styles.muted}`}>Crea tu primera meta y registra cada avance, a tu ritmo.</p></div> : <div className="grid gap-3 sm:grid-cols-2">{goals.map((goal) => <GoalCard key={goal.id} goal={goal} styles={styles} pending={pending} onContribute={contribute} onDelete={(id) => setDeleteTarget({ type: 'goal', id, label: goal.title || 'Meta sin título' })}/>)}</div>}
+      <p className={`text-xs ${styles.muted}`}>Cada meta pendiente permite crear un recordatorio mensual en tu calendario para revisar el ahorro.</p>
+      {goals.length === 0 ? <div className={`rounded-2xl border p-6 text-center ${styles.surface}`}><PiggyBank size={30} className="mx-auto text-emerald-500"/><p className="mt-3 text-sm font-bold">Dale un destino a tu esfuerzo</p><p className={`mt-1 text-xs ${styles.muted}`}>Crea tu primera meta y registra cada avance, a tu ritmo.</p></div> : <div className="grid gap-3 sm:grid-cols-2">{goals.map((goal) => <GoalCard key={goal.id} goal={goal} styles={styles} pending={pending} theme={theme} today={today} onContribute={contribute} onDelete={(id) => setDeleteTarget({ type: 'goal', id, label: goal.title || 'Meta sin título' })}/>)}</div>}
     </section>
 
     {deleteTarget && <div role="alertdialog" aria-modal="false" aria-labelledby="finance-delete-title" aria-describedby="finance-delete-detail" className={`sticky bottom-24 z-20 space-y-3 rounded-2xl border p-4 shadow-xl ${isLight ? 'bg-white border-rose-200' : 'bg-slate-900 border-rose-500/40'}`}><h3 id="finance-delete-title" className="font-bold">¿Eliminar {deleteTarget.type === 'goal' ? 'esta meta' : 'este gasto'}?</h3><p id="finance-delete-detail" className={`break-words text-sm ${styles.muted}`}>{deleteTarget.label}. {deleteTarget.type === 'goal' ? 'También se quitará su progreso registrado.' : 'Se quitará del resumen de ese mes.'}</p><div className="grid grid-cols-2 gap-2"><button type="button" disabled={Boolean(pending)} onClick={() => setDeleteTarget(null)} className={`min-h-11 rounded-xl text-sm font-bold ${styles.secondary}`}>Conservar</button><button type="button" disabled={Boolean(pending)} onClick={confirmDelete} className="min-h-11 rounded-xl bg-rose-600 text-sm font-bold text-white disabled:opacity-50">{pending.startsWith('delete-') ? 'Eliminando…' : 'Eliminar'}</button></div></div>}

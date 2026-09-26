@@ -130,6 +130,30 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/artifacts/$(appId)/public/data/ads/$(data.campaignId)).data.active == true;
     }
 
+    function validCensusCount(value) {
+      return value is int && value >= 0 && value <= 1000000000;
+    }
+
+    function validAccountCensus(data) {
+      return data.keys().hasOnly([
+          'schemaVersion', 'source', 'projectId', 'generatedAt',
+          'totalAccounts', 'registeredAccounts', 'guestAccounts', 'googleAccounts', 'disabledAccounts',
+          'createdLast7Days', 'createdLast30Days', 'signInsLast24Hours', 'signInsLast7Days', 'signInsLast30Days'
+        ])
+        && data.schemaVersion == 1 && data.source == 'firebase-auth' && data.projectId == 'rostermax-60242'
+        && data.generatedAt == request.time
+        && validCensusCount(data.totalAccounts)
+        && validCensusCount(data.registeredAccounts) && validCensusCount(data.guestAccounts)
+        && validCensusCount(data.googleAccounts) && validCensusCount(data.disabledAccounts)
+        && validCensusCount(data.createdLast7Days) && validCensusCount(data.createdLast30Days)
+        && validCensusCount(data.signInsLast24Hours) && validCensusCount(data.signInsLast7Days) && validCensusCount(data.signInsLast30Days)
+        && data.registeredAccounts + data.guestAccounts == data.totalAccounts
+        && data.googleAccounts <= data.registeredAccounts && data.disabledAccounts <= data.totalAccounts
+        && data.createdLast7Days <= data.createdLast30Days && data.createdLast30Days <= data.totalAccounts
+        && data.signInsLast24Hours <= data.signInsLast7Days
+        && data.signInsLast7Days <= data.signInsLast30Days && data.signInsLast30Days <= data.totalAccounts;
+    }
+
     function validAd(data) {
       return data.keys().hasAll([
           'company', 'title', 'location', 'cta', 'url', 'startDate', 'endDate',
@@ -188,6 +212,14 @@ service cloud.firestore {
       match /admins/{userId} {
         allow get: if owns(userId);
         allow list, create, update, delete: if false;
+      }
+
+      // Censo de cuentas procedente de una consulta administrativa completa.
+      // No contiene identidades ni reemplaza la medición opcional de actividad.
+      match /admin_stats/accounts {
+        allow get: if isAdmin(appId);
+        allow create, update: if isAdmin(appId) && validAccountCensus(request.resource.data);
+        allow list, delete: if false;
       }
 
       // Quien acepta un enlace solo puede insertar su propio roster público

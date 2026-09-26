@@ -4,16 +4,16 @@ import {
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
   Briefcase, Sun, Moon, Search, FileText,
   CheckCircle2, Circle, X, Users,
-  Plane, Thermometer, Zap, Wind,
+  Plane, Thermometer, Zap,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
   CloudOff, ShieldAlert, Download, Send, Smartphone,
   Megaphone, Bell, BellRing, Clock3, Link2, LogIn, LogOut,
   ExternalLink, MessageSquare, PauseCircle, Umbrella, Stethoscope,
-  CalendarRange, BarChart3, Activity, ChevronDown,
+  CalendarRange, Activity, ChevronDown,
   ChevronUp, Filter, Clock, Pencil
 } from 'lucide-react';
 import { 
-  GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut,
+  GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut, reauthenticateWithPopup,
 } from 'firebase/auth';
 import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { APP_ID, auth, db } from './lib/firebase';
@@ -21,7 +21,6 @@ import {
   SCHEDULE_EXCEPTION_TYPES,
   addDaysToDate,
   getLocalDate,
-  isRestAvailable,
   getNextTransition,
   getStatusForDate,
   sanitizeSharedExceptions,
@@ -29,7 +28,7 @@ import {
   validateScheduleException,
 } from './lib/roster';
 import { createSyncCode, isValidSyncCode, normalizeSyncCode } from './lib/sync';
-import { fetchCurrentWeather, searchWeatherLocations } from './lib/weather';
+import { searchWeatherLocations } from './lib/weather';
 import { findRestCoincidences, groupCoincidenceWindows } from './lib/coincidences';
 import { getTransitionReminder } from './lib/reminders';
 import { getAuthErrorMessage } from './lib/auth';
@@ -42,12 +41,16 @@ import SessionGate from './components/SessionGate';
 import { useToday } from './lib/useToday';
 import RosterCalendar from './components/RosterCalendar';
 import FinancePanel from './components/FinancePanel';
+import DateSimulator from './components/DateSimulator';
+import CeoAudiencePanel from './components/CeoAudiencePanel';
+import WeatherPanel from './components/WeatherPanel';
+import { fetchAccountCensus } from './lib/accountCensus';
 import PlannerPanel from './components/PlannerPanel';
 import { getCalendarDayLabel } from './lib/calendar';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = import.meta.env.VITE_PUBLIC_APP_URL || 'https://rostermax.vercel.app';
-const APP_VERSION = 'beta-0.5';
+const APP_VERSION = 'beta-0.6';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -191,6 +194,13 @@ function SessionApp({ user, hasAdminClaim }) {
   const [privacySettings, setPrivacySettings] = useState({ analyticsEnabled: false });
   const [activityMetrics, setActivityMetrics] = useState([]);
   const [campaignMetrics, setCampaignMetrics] = useState([]);
+  const [activityState, setActivityState] = useState('loading');
+  const [campaignState, setCampaignState] = useState('loading');
+  const [census, setCensus] = useState(null);
+  const [censusState, setCensusState] = useState('loading');
+  const [censusRefreshing, setCensusRefreshing] = useState(false);
+  const [censusError, setCensusError] = useState('');
+  const censusBusyRef = useRef(false);
   const [friendLiveData, setFriendLiveData] = useState({});
   const [syncCode, setSyncCode] = useState('');
   const [syncState, setSyncState] = useState('loading');
@@ -217,7 +227,6 @@ function SessionApp({ user, hasAdminClaim }) {
   const adContainerRef = useRef(null);
 
   // API States
-  const [weatherData, setWeatherData] = useState({ temp: '--', loading: false, error: '' });
   const [weatherQuery, setWeatherQuery] = useState('');
   const [weatherOptions, setWeatherOptions] = useState([]);
   const [weatherSearching, setWeatherSearching] = useState(false);
@@ -225,6 +234,42 @@ function SessionApp({ user, hasAdminClaim }) {
   const showToast = (message) => {
     setToast(message);
     setTimeout(() => setToast(''), 3000);
+  };
+
+  const refreshAccountCensus = async () => {
+    if (!isAdmin || censusBusyRef.current) return;
+    if (isOffline) { setCensusError('Conéctate a internet para actualizar el censo.'); return; }
+    censusBusyRef.current = true;
+    setCensusRefreshing(true);
+    setCensusError('');
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/identitytoolkit');
+      provider.setCustomParameters({ prompt: 'consent' });
+      const result = await reauthenticateWithPopup(user, provider);
+      // The OAuth access token is used in memory only, never persisted or logged.
+      const accessToken = GoogleAuthProvider.credentialFromResult(result)?.accessToken;
+      const completedCensus = await fetchAccountCensus(accessToken);
+      if (auth.currentUser?.uid !== user.uid) return;
+      await setDoc(doc(db, 'artifacts', APP_ID, 'admin_stats', 'accounts'), {
+        ...completedCensus, generatedAt: serverTimestamp(),
+      });
+      showToast('Censo actualizado. Se guardaron únicamente totales.');
+    } catch (error) {
+      const messages = {
+        'census/permission-denied': 'Google no autorizó la lectura de las cuentas de Firebase. Usa la cuenta propietaria del proyecto y acepta el permiso solicitado.',
+        'census/expired-token': 'La autorización de Google venció. Intenta actualizar de nuevo.',
+        'census/timeout': 'La consulta tardó demasiado. Conservamos el último censo completo; vuelve a intentarlo.',
+        'auth/user-mismatch': 'Selecciona la misma cuenta de Google con la que entraste al panel CEO.',
+        'auth/popup-closed-by-user': 'Se cerró la autorización. El censo anterior sigue guardado.',
+        'auth/popup-blocked': 'El navegador bloqueó la ventana. Permite ventanas emergentes o abre RosterMax en Chrome.',
+        'permission-denied': 'No se pudo guardar el censo. Revisa los permisos privados del panel CEO.',
+      };
+      setCensusError(messages[error?.code] || 'No se pudo completar la actualización. Conservamos el último censo; revisa tu conexión y vuelve a intentarlo.');
+    } finally {
+      censusBusyRef.current = false;
+      setCensusRefreshing(false);
+    }
   };
 
   const savePrivate = async (promise, message) => {
@@ -438,7 +483,13 @@ function SessionApp({ user, hasAdminClaim }) {
   useEffect(() => {
     if (!user || !loaded.privacy || !loaded.roster || !loaded.profile || !privacySettings.analyticsEnabled || isOffline) return;
     const activityRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'activity', user.uid);
-    runTransaction(db, async (transaction) => {
+    let lastRecorded = 0;
+    let recording = false;
+    let cancelled = false;
+    const recordVisibleActivity = async () => {
+      if (cancelled || recording || document.visibilityState === 'hidden' || Date.now() - lastRecorded < 15 * 60000) return;
+      recording = true;
+      try { await runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(activityRef);
       transaction.set(activityRef, {
         ownerUid: user.uid,
@@ -451,7 +502,20 @@ function SessionApp({ user, hasAdminClaim }) {
         profileComplete: Boolean(userProfile.displayName?.trim()),
         appVersion: APP_VERSION,
       });
-    }).catch((error) => console.error('No se pudo actualizar la métrica de actividad.', error));
+      }); lastRecorded = Date.now(); }
+      catch { /* Optional measurement must never block the worker's app. */ }
+      finally { recording = false; }
+    };
+    recordVisibleActivity();
+    const interval = setInterval(recordVisibleActivity, 15 * 60000);
+    window.addEventListener('focus', recordVisibleActivity);
+    document.addEventListener('visibilitychange', recordVisibleActivity);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('focus', recordVisibleActivity);
+      document.removeEventListener('visibilitychange', recordVisibleActivity);
+    };
   }, [user, privacySettings.analyticsEnabled, installDetected, rosterSaved, userProfile.displayName, today, loaded.privacy, loaded.roster, loaded.profile, isOffline]);
 
   useEffect(() => {
@@ -470,15 +534,23 @@ function SessionApp({ user, hasAdminClaim }) {
     if (!user || !isAdmin) return undefined;
     const unsubscribeActivity = onSnapshot(
       collection(db, 'artifacts', APP_ID, 'public', 'data', 'activity'),
-      (snapshot) => setActivityMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
-      (error) => console.error('No se pudieron cargar las métricas de audiencia.', error),
+      { includeMetadataChanges: true },
+      (snapshot) => { setActivityMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))); setActivityState(snapshot.metadata.fromCache ? 'loading' : 'ready'); },
+      () => setActivityState('error'),
     );
     const unsubscribeCampaigns = onSnapshot(
       collection(db, 'artifacts', APP_ID, 'public', 'data', 'campaign_metrics'),
-      (snapshot) => setCampaignMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))),
-      (error) => console.error('No se pudieron cargar las métricas de campañas.', error),
+      { includeMetadataChanges: true },
+      (snapshot) => { setCampaignMetrics(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))); setCampaignState(snapshot.metadata.fromCache ? 'loading' : 'ready'); },
+      () => setCampaignState('error'),
     );
-    return () => { unsubscribeActivity(); unsubscribeCampaigns(); };
+    const unsubscribeCensus = onSnapshot(
+      doc(db, 'artifacts', APP_ID, 'admin_stats', 'accounts'),
+      { includeMetadataChanges: true },
+      (snapshot) => { setCensus(snapshot.exists() ? snapshot.data() : null); setCensusState(snapshot.metadata.fromCache ? 'loading' : 'ready'); },
+      () => setCensusState('error'),
+    );
+    return () => { unsubscribeActivity(); unsubscribeCampaigns(); unsubscribeCensus(); };
   }, [user, isAdmin]);
 
   // Solo escucha los códigos que el usuario agregó explícitamente.
@@ -549,27 +621,6 @@ function SessionApp({ user, hasAdminClaim }) {
       return friend;
     });
   }, [friends, friendLiveData]);
-
-  // --- CLIMA REAL ---
-  useEffect(() => {
-    let cancelled = false;
-    const loadWeather = async () => {
-      const location = userProfile.weatherLocation;
-      if (!Number.isFinite(location?.latitude) || !Number.isFinite(location?.longitude)) {
-        setWeatherData({ temp: '--', loading: false, error: 'Configura el clima' });
-        return;
-      }
-      setWeatherData((current) => ({ ...current, loading: true, error: '' }));
-      try {
-        const weather = await fetchCurrentWeather(location.latitude, location.longitude);
-        if (!cancelled) setWeatherData({ ...weather, loading: false, error: '' });
-      } catch (error) {
-        if (!cancelled) setWeatherData({ temp: '--', loading: false, error: error.message });
-      }
-    };
-    loadWeather();
-    return () => { cancelled = true; };
-  }, [userProfile.weatherLocation, isOffline, today]);
 
   // Las alertas web locales se muestran cuando el usuario abre la app dentro
   // de la ventana elegida. Las notificaciones con la app cerrada requerirán Push.
@@ -1351,20 +1402,7 @@ function SessionApp({ user, hasAdminClaim }) {
             )}
 
             <div className={`grid grid-cols-2 gap-4`}>
-               <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center`}>
-                 <Thermometer size={24} className={`${theme === 'light' ? 'text-amber-500' : 'text-amber-500'} mb-2`}/>
-                 <span className="text-2xl font-bold">{weatherData.loading ? '...' : `${weatherData.temp}°C`}</span>
-                 <span className="text-xs font-bold mt-1 max-w-full truncate px-2" title={userProfile.weatherLocation?.label}>
-                   {userProfile.weatherLocation?.name || 'Sin ubicación'}
-                 </span>
-                 {weatherData.error ? (
-                   <span className="text-[9px] text-red-400 truncate max-w-full" title={weatherData.error}>{weatherData.error}</span>
-                 ) : (
-                   <span className={`text-[9px] ${textMuted} flex items-center gap-1`}>
-                     <Wind size={9}/> {weatherData.windSpeed ?? '--'} km/h{weatherData.stale ? ' · guardado' : ''}
-                   </span>
-                 )}
-               </div>
+               <WeatherPanel theme={theme} location={userProfile.weatherLocation} onChangeLocation={() => setActiveTab('settings')}/>
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center text-indigo-400`}>
                  {getTransportIcon(userProfile.transport)}
                  <span className={`text-sm font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>{nextTransition.error ? 'Sin fecha calculada' : `En ${nextTransition.daysUntil} días`}</span>
@@ -1420,41 +1458,7 @@ function SessionApp({ user, hasAdminClaim }) {
               </div>
             )}
             
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-blue-500 relative overflow-hidden`}>
-              <div className="absolute -right-4 -top-4 opacity-10"><Search size={80} className="text-blue-500"/></div>
-              <h3 className="font-bold flex items-center mb-1"><Search size={18} className="mr-2 text-blue-500"/> Simulador de Fechas</h3>
-              <p className={`text-[11px] mb-4 ${textMuted} relative z-10`}>Selecciona una fecha para cruzar tu diagrama con el de tus compañeros.</p>
-              <input type="date" value={targetDate} aria-label="Fecha para comparar rosters" onChange={(e) => setTargetDate(e.target.value)} className={`w-full rounded-xl px-4 py-3 outline-none border ${inputBg} mb-4 relative z-10`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} />
-              
-              {targetDate && (
-                <div className="space-y-2 relative z-10 max-h-96 overflow-y-auto">
-                  {targetStatus && (
-                    <div className={`p-3 rounded-lg border flex justify-between items-center shadow-sm ${targetStatus.isWorking ? (theme==='light'?'bg-amber-50 border-amber-200':'bg-amber-500/10 border-amber-500/30') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30')}`}>
-                      <span className="font-semibold text-sm flex items-center"><User size={14} className="mr-1.5 opacity-70"/> Tú</span>
-                      <span className={`text-xs font-bold px-2 py-1 rounded ${targetStatus.isWorking ? 'text-amber-600 bg-amber-500/20' : 'text-emerald-600 bg-emerald-500/20'}`}>{getCalendarDayLabel(targetStatus)}</span>
-                    </div>
-                  )}
-                  {displayFriends.map(friend => {
-                    const status = getStatusForDate(targetDate, friend);
-                    if (!status || status.error || friend.syncAvailable === false) {
-                      return (
-                        <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
-                          <span className="font-semibold text-sm">{friend.name}</span>
-                          <span className="text-xs text-amber-500">Sin datos sincronizados</span>
-                        </div>
-                      );
-                    }
-                    const isCoincidence = isRestAvailable(targetStatus) && isRestAvailable(status);
-                    return (
-                      <div key={friend.id} className={`p-3 rounded-lg border flex justify-between items-center transition-all ${status.isWorking ? (theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800/40 border-slate-700') : (isCoincidence ? (theme==='light'?'bg-emerald-100 border-emerald-300 shadow-md':'bg-emerald-500/20 border-emerald-500 shadow-md shadow-emerald-500/10') : (theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/10 border-emerald-500/30'))}`}>
-                        <span className="font-semibold text-sm flex items-center">{friend.name} {isCoincidence && <Zap size={14} className="ml-1 text-yellow-500 fill-yellow-500 animate-pulse"/>}{friend.isSynced && <Share2 size={12} className="ml-1.5 text-blue-400" title="Sincronizado"/>}</span>
-                        <span className={`text-xs font-bold px-2 py-1 rounded ${status.isWorking ? 'text-slate-500' : (isCoincidence ? 'text-emerald-700 bg-emerald-400/30' : 'text-emerald-500')}`}>{isCoincidence ? '¡COINCIDEN!' : getCalendarDayLabel(status)}</span>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+            <DateSimulator theme={theme} today={today} date={targetDate} onDateChange={setTargetDate} ownStatus={targetStatus} friends={displayFriends}/>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex items-center justify-between mb-1">
@@ -1736,16 +1740,7 @@ function SessionApp({ user, hasAdminClaim }) {
               </div>
             </div>
 
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-start justify-between"><div><h3 className="font-bold flex items-center"><BarChart3 size={18} className="mr-2 text-blue-500"/> Audiencia medible</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Muestra voluntaria de cuentas, no el total de personas ni descargas. Usa identificadores seudónimos; no incluye el contenido privado del trabajador.</p></div><span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black text-blue-500">OPT-IN</span></div>
-              <div className="grid grid-cols-2 gap-2 mt-4">
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-blue-50' : 'bg-blue-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Cuentas medidas</p><p className="text-2xl font-black text-blue-500">{audienceSummary.measuredUsers}</p></div>
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-emerald-50' : 'bg-emerald-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 30 días</p><p className="text-2xl font-black text-emerald-500">{audienceSummary.activeMonth}</p></div>
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-indigo-50' : 'bg-indigo-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 7 días</p><p className="text-2xl font-black text-indigo-500">{audienceSummary.activeWeek}</p></div>
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[9px] ${textMuted}`}>Activos 24 horas</p><p className="text-2xl font-black text-amber-500">{audienceSummary.activeDay}</p></div>
-              </div>
-              <div className={`grid grid-cols-3 gap-2 mt-2 text-center ${textMuted}`}><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.linkedAccounts}</p><p className="text-[8px] uppercase">Cuentas</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.installsDetected}</p><p className="text-[8px] uppercase">PWA detectada</p></div><div className={`rounded-lg p-2 ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><p className="text-sm font-black">{audienceSummary.configuredRosters}</p><p className="text-[8px] uppercase">Configuradas</p></div></div>
-            </div>
+            <CeoAudiencePanel theme={theme} census={census} censusState={censusState} activityState={activityState} audience={audienceSummary} refreshing={censusRefreshing} refreshError={censusError} onRefresh={refreshAccountCensus} today={today}/>
 
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
               <h3 className="font-bold flex items-center mb-1 text-amber-500"><Megaphone size={18} className="mr-2"/> Nueva campaña patrocinada</h3>
@@ -1771,10 +1766,11 @@ function SessionApp({ user, hasAdminClaim }) {
               {ads.length === 0 ? <p className={`text-xs ${textMuted}`}>Todavía no creaste campañas.</p> : (
                 <div className="space-y-3">
                   {ads.map((ad) => {
-                    const metrics = getCampaignSummary(ad.id, campaignMetrics);
+                    const metrics = campaignState === 'ready' ? getCampaignSummary(ad.id, campaignMetrics) : { reach: '—', impressions: '—', clicks: '—', ctr: null };
                     return <div key={ad.id} className={`rounded-xl border p-4 ${ad.active ? 'border-emerald-500/30' : theme === 'light' ? 'border-slate-200 opacity-60' : 'border-slate-700 opacity-60'}`}>
                       <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-bold truncate">{ad.title}</p><p className={`text-[10px] ${textMuted}`}>{ad.company} · {ad.location}</p><p className={`text-[10px] mt-1 ${textMuted}`}>{ad.startDate || 'Sin fecha'} — {ad.endDate || 'Sin fecha'}</p></div><span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full ${ad.active ? 'bg-emerald-500/15 text-emerald-500' : 'bg-slate-500/15 text-slate-500'}`}>{ad.active ? 'Activa' : 'Pausada'}</span></div>
-                      <div className={`grid grid-cols-4 gap-1 mt-3 rounded-xl p-2 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div><p className="text-xs font-black">{metrics.reach}</p><p className={`text-[8px] ${textMuted}`}>Cuentas</p></div><div><p className="text-xs font-black">{metrics.impressions}</p><p className={`text-[8px] ${textMuted}`}>Vistas</p></div><div><p className="text-xs font-black">{metrics.clicks}</p><p className={`text-[8px] ${textMuted}`}>Clics</p></div><div><p className="text-xs font-black">{metrics.ctr.toFixed(1)}%</p><p className={`text-[8px] ${textMuted}`}>CTR</p></div></div>
+                      <div className={`grid grid-cols-4 gap-1 mt-3 rounded-xl p-2 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}><div><p className="text-xs font-black">{metrics.reach}</p><p className={`text-[8px] ${textMuted}`}>Cuentas</p></div><div><p className="text-xs font-black">{metrics.impressions}</p><p className={`text-[8px] ${textMuted}`}>Vistas</p></div><div><p className="text-xs font-black">{metrics.clicks}</p><p className={`text-[8px] ${textMuted}`}>Clics</p></div><div><p className="text-xs font-black">{metrics.ctr === null ? '—' : `${metrics.ctr.toFixed(1)}%`}</p><p className={`text-[8px] ${textMuted}`}>CTR</p></div></div>
+                      {campaignState !== 'ready' && <p role="status" className="mt-2 text-xs text-amber-500">{campaignState === 'error' ? 'No se pudieron leer las métricas de campañas.' : 'Cargando métricas…'}</p>}
                       {ad.active && <button type="button" onClick={() => pauseAd(ad.id)} className="mt-3 w-full rounded-lg border border-red-500/20 text-red-400 py-2 text-xs font-bold flex items-center justify-center"><PauseCircle size={14} className="mr-1.5"/> Pausar campaña</button>}
                     </div>;
                   })}
