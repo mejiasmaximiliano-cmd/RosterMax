@@ -1,0 +1,86 @@
+{
+  "checkedAt": "2026-10-24T12:55:07.485Z",
+  "origin": "https://rostermax.vercel.app",
+  "version": {
+    "version": "beta-0.7",
+    "commit": "ba44304ba29c0d14efc8c91487fd09637a0b73a9",
+    "build": "f5b6a567ef6bf7e4519b",
+    "environment": "production",
+    "builtAt": "2026-10-24T12:53:58.439Z"
+  },
+  "htmlStatus": 200,
+  "resources": [
+    {
+      "path": "/assets/index-CU57C54f.js",
+      "bytes": 1039721,
+      "sha256": "fe0cdb8bafacbfc22c17760bca777d4e8294969fd7b7af5151da9db63618caef"
+    },
+    {
+      "path": "/assets/CeoAudiencePanel-CPkjYBrx.js",
+      "bytes": 9020,
+      "sha256": "9f23439ed15862b4fd118512029e9ee6f626b9788cb5c10cbd11df656bce02c5"
+    },
+    {
+      "path": "/assets/CeoOperationsPanel-VbzcCCA6.js",
+      "bytes": 7190,
+      "sha256": "51d3e0d3251bc703e3f4c23be59c4c81aeff8eec8958cff4f57b227971fbb6fb"
+    },
+    {
+      "path": "/assets/FinancePanel-BigeV-R7.js",
+      "bytes": 26301,
+      "sha256": "dd6200ac8a2ce61257f484a2e2bde5dbc24fe6bd6720e7a5f8326770edd4174b"
+    },
+    {
+      "path": "/assets/PlannerPanel-DMsIJEYS.js",
+      "bytes": 15773,
+      "sha256": "d8e79dd0330effd95f7edf1d1a9ebafe043e845b2902d95c0a34cf9349b27ad3"
+    },
+    {
+      "path": "/assets/PrivacyPanel-JUQIICTM.js",
+      "bytes": 4666,
+      "sha256": "6d0c5044acb7542d7e0790992643e2adcfd0f875ac39c9c4074d94ec7c34a632"
+    },
+    {
+      "path": "/assets/ReminderEditor-nVtYMkOE.js",
+      "bytes": 12636,
+      "sha256": "89708afe852144efa97aeca1fa8803d1d5cd2a938889f6c57a6d2763cf4b449f"
+    },
+    {
+      "path": "/assets/createLucideIcon-DS-5y4ep.js",
+      "bytes": 3076,
+      "sha256": "9bedc18eae903727a0c81d2997603b5f58f60873d2407076801e6ccda11dd942"
+    },
+    {
+      "path": "/assets/jsx-runtime-Am8b9ysO.js",
+      "bytes": 8276,
+      "sha256": "9bd1e242e0169cc4dc70b19b33bcdae67118a8d2e564f794723fd15f0d4cab40"
+    },
+    {
+      "path": "/assets/index-Bv62WoH-.css",
+      "bytes": 55567,
+      "sha256": "7e124a1f4f5fcdda5278b296afead0cab59213cc1f85be45ea9aa747dee35d7a"
+    }
+  ],
+  "denials": {
+    "ceo": 403,
+    "privateLedger": 403
+  },
+  "browser": {
+    "pageErrors": [],
+    "unexpectedPublicNetwork": [],
+    "blockedBackendRequests": [
+      {
+        "host": "identitytoolkit.googleapis.com",
+        "path": "/v1/accounts:signUp",
+        "method": "POST"
+      }
+    ],
+    "cache": {
+      "controller": true,
+      "keys": [
+        "rostermax-complete-f5b6a567ef6bf7e4519b"
+      ]
+    },
+    "scope": "REAL production assets/worker execution. Auth deliberately intercepted BEFORE account creation; expected session-error screenshot is NOT a production outage. No real-session navigation, OAuth, data writes or physical-phone claims."
+  }
+}

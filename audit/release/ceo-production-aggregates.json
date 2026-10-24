@@ -1,0 +1,136 @@
+{
+  "environment": "REAL production, aggregate-only authorized reads; NO fixtures, no private user contents",
+  "censusPublishedAt": "2026-10-24T12:47:43.752Z",
+  "manualPublish": true,
+  "publishScope": "admin_stats/accounts only; CLI operation does not generate an in-app admin_audit event",
+  "current": {
+    "checkedAt": "2026-10-24T12:55:48.456Z",
+    "auth": {
+      "available": true,
+      "snapshot": {
+        "schemaVersion": 1,
+        "source": "firebase-auth",
+        "projectId": "rostermax-60242",
+        "totalAccounts": 185,
+        "registeredAccounts": 4,
+        "guestAccounts": 181,
+        "googleAccounts": 4,
+        "disabledAccounts": 0,
+        "createdLast7Days": 8,
+        "createdLast30Days": 44,
+        "signInsLast24Hours": 3,
+        "signInsLast7Days": 9,
+        "signInsLast30Days": 45,
+        "createdLast24Hours": 2,
+        "createdRegisteredLast24Hours": 0,
+        "createdGuestLast24Hours": 2,
+        "createdRegisteredLast7Days": 0,
+        "createdGuestLast7Days": 8,
+        "createdRegisteredLast30Days": 1,
+        "createdGuestLast30Days": 43
+      }
+    },
+    "firestore": {
+      "measuredAccounts": {
+        "available": true,
+        "count": 1
+      },
+      "measuredGoogleAccounts": {
+        "available": true,
+        "count": 1
+      },
+      "measuredInstalls": {
+        "available": true,
+        "count": 1
+      },
+      "measuredRosterConfigured": {
+        "available": true,
+        "count": 1
+      },
+      "measuredActive24Hours": {
+        "available": true,
+        "count": 1
+      },
+      "measuredActive7Days": {
+        "available": true,
+        "count": 1
+      },
+      "measuredActive30Days": {
+        "available": true,
+        "count": 1
+      },
+      "publicRosterDocuments": {
+        "available": true,
+        "count": 57
+      },
+      "campaignMetricDocuments": {
+        "available": true,
+        "count": 0
+      },
+      "settingsWithConsent": {
+        "available": false,
+        "httpStatus": 400,
+        "reason": "query-unavailable"
+      },
+      "settingsWithWorkDays": {
+        "available": false,
+        "httpStatus": 400,
+        "reason": "query-unavailable"
+      }
+    },
+    "billing": {
+      "available": true,
+      "billingEnabled": false
+    },
+    "publishRequested": false,
+    "published": false
+  },
+  "protectedState": {
+    "checkedAt": "2026-10-24T12:55:52.948Z",
+    "readOnly": true,
+    "savedCensus": {
+      "available": true,
+      "generatedAt": "2026-10-24T12:47:43.752Z",
+      "total": "185",
+      "registered": "4",
+      "guests": "181"
+    },
+    "protectedRegistry": {
+      "available": true,
+      "httpStatus": 200,
+      "records": 1,
+      "active": 1,
+      "complete": true
+    },
+    "claimsOfRegisteredAdmins": {
+      "available": true,
+      "checked": 1,
+      "adminClaim": 0
+    },
+    "projectCustomClaims": {
+      "complete": true,
+      "accountsChecked": 185,
+      "withAdminClaim": 0
+    },
+    "limitation": "Solo agregados administrativos; no muestra identificadores ni contenido privado de usuarios."
+  },
+  "deployedRulesAndFeedback": {
+    "checkedAt": "2026-10-24T12:55:59.008Z",
+    "project": "rostermax-60242",
+    "namespace": "roster-max-production",
+    "readOnly": true,
+    "rules": {
+      "release": "projects/rostermax-60242/releases/cloud.firestore",
+      "ruleset": "projects/rostermax-60242/rulesets/ce318a10-bd90-4082-965e-35605e9f385a",
+      "updatedAt": "2026-10-24T12:45:04.918646Z",
+      "sha256": "6ccbeacc7c57ad1ded8957e3e383caca08d808ec5ba9630e87a1152033ed5e03",
+      "matchesLocal": true
+    },
+    "feedbackCounts": {
+      "all": 4,
+      "new": 4,
+      "in_progress": 0,
+      "resolved": 0
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "date": "2026-10-24",
+  "release": "beta-0.7",
+  "commit": "ba44304ba29c0d14efc8c91487fd09637a0b73a9",
+  "build": "f5b6a567ef6bf7e4519b",
+  "url": "https://rostermax.vercel.app/",
+  "local": {
+    "lint": "passed",
+    "nodeTests": {
+      "passed": 142,
+      "logic": 123,
+      "rules": 19,
+      "failed": 0,
+      "skipped": 0
+    },
+    "e2e": {
+      "passed": 21,
+      "failed": 0,
+      "skipped": 0,
+      "browser": "Chrome",
+      "environment": "demo-rostermax Auth/Firestore only",
+      "widths": [
+        390,
+        768,
+        1440
+      ]
+    },
+    "builds": [
+      "emulator",
+      "production explicit"
+    ],
+    "negativeNoEnvironmentBuild": "expected rejection, passed",
+    "auditProduction": 0,
+    "auditDevelopment": {
+      "moderate": 6,
+      "high": 0,
+      "critical": 0
+    },
+    "diffCheck": "passed"
+  },
+  "production": {
+    "deployment": "https://vercel.com/mejiasmaximiliano-3306s-projects/roster-max/3jbQrf2kCgxyhquSNUpmxCmSjV7M",
+    "state": "success",
+    "resourceChecks": 10,
+    "unauthenticatedDenials": {
+      "ceo": 403,
+      "privateCompensatories": 403
+    },
+    "firebaseClientConfiguration": {
+      "verifiedFields": 9,
+      "allMatchCompiledBundle": true,
+      "valuesNotCopiedHere": true
+    },
+    "feedback": {
+      "before": {
+        "all": 4,
+        "new": 4,
+        "in_progress": 0,
+        "resolved": 0
+      },
+      "after": {
+        "all": 4,
+        "new": 4,
+        "in_progress": 0,
+        "resolved": 0
+      }
+    },
+    "census": "manual aggregate-only publication; 185/181 guests/4 Google",
+    "rulesHash": "6ccbeacc7c57ad1ded8957e3e383caca08d808ec5ba9630e87a1152033ed5e03",
+    "ruleMatchLocal": true,
+    "browserScope": "Real public assets and worker only; Auth sign-up intercepted, no production test-account or data writes."
+  },
+  "ci": {
+    "id": 40095830054,
+    "status": "completed",
+    "conclusion": "success",
+    "finishedAt": "2026-10-24T12:57:32Z",
+    "url": "https://github.com/mejiasmaximiliano-cmd/RosterMax/actions/runs/40095830054"
+  },
+  "performance": {
+    "comparison": "Same local toolchain, explicit production configuration",
+    "baselineCommit": "44975c7",
+    "baselineInitialJSBytes": 1110653,
+    "releaseInitialJSBytes": 1049748,
+    "baselineGzipBytes": 325110,
+    "releaseGzipBytes": 309259,
+    "actuallyServedInitialJSBytes": 1051073,
+    "localDclMs": [
+      148.6,
+      150.1,
+      145.1
+    ],
+    "limitations": "Loopback, no throttling. Not real phone speed or production CWV. All chunks still precached for offline."
+  },
+  "notVerified": [
+    "Google OAuth on real phone",
+    "Real-session production navigation and second-device session",
+    "Native virtual keyboard",
+    "Physical Android/iOS PWA installation/update",
+    "Delivery of calendar notifications or closed-app push (not implemented)"
+  ]
+}

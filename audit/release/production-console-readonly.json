@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-10-24T13:02:26.439Z",
+  "scope": "REAL production assets and worker. Backend writes blocked: Auth HTTP 400 fulfilled locally deliberately, not a production failure.",
+  "console": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    },
+    {
+      "type": "log",
+      "text": "SW registrado https://rostermax.vercel.app/"
+    }
+  ],
+  "pageErrors": []
+}

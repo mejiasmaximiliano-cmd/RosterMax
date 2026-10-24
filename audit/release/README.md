@@ -1,6 +1,6 @@
 # Evidencias de beta-0.7 — 24/10/2026
 
-Todas las imágenes de paneles de esta carpeta se generan **localmente**, con Auth/Firestore en emuladores `demo-rostermax`, cuentas ficticias y Chrome automatizado. No son capturas de la cuenta real ni una validación de OAuth o dispositivos físicos.
+Las imágenes de paneles se generan **localmente**, con Auth/Firestore en emuladores `demo-rostermax`, cuentas ficticias y Chrome automatizado. No son capturas de la cuenta real ni una validación de OAuth o dispositivos físicos. Excepción explícita: `production-readonly-session-gate-390.png` ejecuta recursos **reales de producción**, pero bloquea Auth antes de crear cuentas; muestra el error esperado de esa interceptación, **no una caída real**. Su alcance y resultados están en `production-check.json`.
 
 El panel CEO puede mostrar **150/146/4** porque `e2e/ceo-audience.spec.js` crea ese snapshot ficticio; otras pantallas reutilizan la base de emuladores. Eso no contradice el censo administrativo de producción **185/181/4**, cuya fecha/fuente se documenta en el reporte. No interpretar ninguna cifra, comentario, nombre ni movimiento de estas capturas como datos reales.
 
