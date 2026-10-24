@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-24",
+  "scope": "local implementation, fictitious data, no production writes",
+  "branch": "codex/integral-reliability-ceo-compensatorios",
+  "baseline": "8db6d54eee2c934c651e42e1e7a0233abe3a4875",
+  "testAll": { "exitCode": 0, "unitsAndRules": { "passed": 140, "failed": 0, "skipped": 0, "cancelled": 0, "rulesCases": 19 }, "playwright": { "passed": 19, "failed": 0, "skipped": 0, "channel": "chrome", "widths": [390, 768, 1440] } },
+  "lint": { "exitCode": 0 },
+  "buildEmulator": { "exitCode": 0, "jsKB": 1110.29, "gzipKB": 327.92, "largeChunkWarning": true },
+  "buildProductionExplicit": { "exitCode": 0, "localCompilationOnly": true, "jsKB": 1110.73, "gzipKB": 328.09 },
+  "buildWithoutConfiguration": { "exitCode": 1, "expectedRejection": true, "code": "configuration/invalid-environment" },
+  "npmAuditProduction": { "exitCode": 0, "vulnerabilities": 0 },
+  "npmAuditAll": { "exitCode": 1, "moderate": 6, "high": 0, "critical": 0, "pendingDevelopmentTooling": true },
+  "screenshots": 21,
+  "notExecuted": ["real Google OAuth", "physical Android or iOS installation", "physical reminder delivery", "remote CI", "production rules deployment", "Vercel deployment"],
+  "intermediateFailures": ["emulators unavailable: restarted before final suite", "test SDK import mismatch and accessibility labels: corrected", "compensatory form confirmation race: fixed and regression tested", "artificial WebChannel abort/disable/reload caused SDK assertion; replaced with real browser-offline PWA test; physical-network follow-up remains"]
+}

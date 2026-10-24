@@ -1,0 +1,14 @@
+{
+  "productionWrites": false,
+  "authCensusReadAt": "2026-10-24T04:09:02.956Z",
+  "auth": { "totalAccounts": 185, "registeredAccounts": 4, "googleAccounts": 4, "guestAccounts": 181, "disabledAccounts": 0, "createdLast7Days": 8, "createdLast30Days": 44, "signInsLast24Hours": 2, "signInsLast7Days": 8, "signInsLast30Days": 44 },
+  "voluntarySample": { "accounts": 1, "googleAccounts": 1, "active24h": 1, "active7d": 1, "active30d": 1, "installDetectedAccounts": 1, "rosterConfiguredAccounts": 1 },
+  "publicRosterDocuments": 57,
+  "campaignMetricDocuments": 0,
+  "unavailableQueries": ["collection-group settings consent: HTTP 400", "collection-group settings configured roster: HTTP 400"],
+  "protectedStateReadAt": "2026-10-24T11:16:08.564Z",
+  "savedCensus": { "generatedAt": "2026-09-26T04:17:00.019Z", "totalAccounts": 150, "registeredAccounts": 4, "guestAccounts": 146 },
+  "protectedRegistry": { "complete": true, "records": 1, "active": 1, "registeredAdminsWithAdminClaim": 0 },
+  "projectCustomClaims": { "complete": true, "accountsChecked": 185, "withAdminClaim": 0 },
+  "notes": ["No identities or personal content retained", "Auth logins are not application opens", "Public roster documents are not people", "No census was published"]
+}

@@ -94,4 +94,3 @@ for (const width of [390, 768, 1440]) test(`compensatorios independientes, histo
   expect(await dates(page)).toEqual(before);
   expect(errors).toEqual([]);
 });
-
