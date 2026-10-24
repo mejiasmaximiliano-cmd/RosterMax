@@ -2,6 +2,19 @@ import { useEffect, useState } from 'react';
 
 // Transient UI only: never stored, sent or used as a write/operation identifier.
 const baselines = new WeakMap();
+const writes = new WeakMap();
+export function beginFormWrite(form) {
+  if (!form) return () => {};
+  const state=writes.get(form)||{count:0,previous:form.getAttribute('aria-busy')};
+  state.count++; writes.set(form,state); form.setAttribute('aria-busy','true');
+  let released=false;
+  return () => {
+    if(released) return; released=true; state.count--;
+    if(state.count) return;
+    writes.delete(form);
+    if(state.previous===null) form.removeAttribute('aria-busy'); else form.setAttribute('aria-busy',state.previous);
+  };
+}
 export const readForm = (form) => form ? JSON.stringify([...form.elements].filter(el=>['INPUT','SELECT','TEXTAREA'].includes(el.tagName)&&!['submit','reset','button'].includes(el.type)).map((el,index)=>[el.name||String(index),el.type,el.type==='checkbox'||el.type==='radio'?el.checked:el.multiple?[...el.selectedOptions].map(option=>option.value):el.value])) : '';
 const formsInside = (root) => root?.matches?.('form') ? [root] : [...(root?.querySelectorAll('form') || [])];
 export function markFormSaved(form, values = readForm(form)) { if (form) baselines.set(form, values); }

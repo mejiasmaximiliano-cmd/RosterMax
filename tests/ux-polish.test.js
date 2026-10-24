@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { syncLabel } from '../src/lib/syncPresentation.js';
-import { readForm, markFormSaved, formChanged, containerChanged } from '../src/lib/formGuard.js';
+import { readForm, markFormSaved, formChanged, containerChanged, beginFormWrite } from '../src/lib/formGuard.js';
 
 const input=(value,extra={})=>({tagName:'INPUT',type:'text',name:'',value,...extra});
+test('busy state belongs only to its submitted form, releases once and restores prior accessibility state',()=>{
+  const make=()=>{const attrs=new Map();return {getAttribute:k=>attrs.get(k)??null,setAttribute:(k,v)=>attrs.set(k,v),removeAttribute:k=>attrs.delete(k)};};
+  const form=make(),unrelated=make(); const first=beginFormWrite(form),second=beginFormWrite(form);
+  assert.equal(form.getAttribute('aria-busy'),'true'); assert.equal(unrelated.getAttribute('aria-busy'),null);
+  first(); first(); assert.equal(form.getAttribute('aria-busy'),'true'); second(); assert.equal(form.getAttribute('aria-busy'),null);
+  form.setAttribute('aria-busy','false'); beginFormWrite(form)(); assert.equal(form.getAttribute('aria-busy'),'false');
+  assert.doesNotThrow(()=>beginFormWrite(null)());
+});
 test('dirty tracking includes unnamed controlled fields, excludes submit controls and recognizes reverting text',()=>{
   const title=input(''),form={elements:[title,input('Guardar',{type:'submit'})]};
   markFormSaved(form); assert.equal(formChanged(form),false);

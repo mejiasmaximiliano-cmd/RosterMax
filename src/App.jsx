@@ -61,7 +61,7 @@ import { welcomeState } from './lib/welcomeState';
 import BottomNav from './components/BottomNav';
 import SyncStatus from './components/SyncStatus';
 import DiscardChanges from './components/DiscardChanges';
-import { useFormTracking, useDiscardGuard, readForm, markFormSaved } from './lib/formGuard';
+import { useFormTracking, useDiscardGuard, readForm, markFormSaved, beginFormWrite } from './lib/formGuard';
 const HelpCenter = lazy(() => import('./components/HelpCenter'));
 const themeKey = (uid) => `rostermax:theme:${APP_ID}:${uid}`;
 function cachedTheme(uid) { try { return localStorage.getItem(themeKey(uid)) === 'dark' ? 'dark' : 'light'; } catch { return 'light'; } }
@@ -322,6 +322,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const savePrivate = async (promise, message) => {
     const form = submittedForm.current, submittedValues = readForm(form), acceptedLocally = !navigator.onLine;
+    const finishFormWrite = acceptedLocally ? () => {} : beginFormWrite(form);
     setPendingWrites((count) => count + 1);
     const completion = promise.then(() => {
       // Offline acceptance already marked this submission. A later server ACK
@@ -333,7 +334,7 @@ function SessionApp({ user, hasAdminClaim }) {
       console.error('No se pudo guardar el cambio.', error);
       setDataError('Un cambio no pudo sincronizarse. Revisá tu conexión y volvé a intentarlo.');
       return false;
-    }).finally(() => setPendingWrites((count) => Math.max(0, count - 1)));
+    }).finally(() => { finishFormWrite(); setPendingWrites((count) => Math.max(0, count - 1)); });
     if (acceptedLocally) {
       markFormSaved(form, submittedValues);
       showToast('Guardado en este dispositivo · Pendiente de sincronizar.');
@@ -1743,7 +1744,7 @@ function SessionApp({ user, hasAdminClaim }) {
             <h2 className="text-lg font-bold">Perfil laboral</h2>
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos laborales</h3>
-              <form onSubmit={updateProfile} aria-busy={pendingWrites>0 && !isOffline} className="space-y-4">
+              <form onSubmit={updateProfile} className="space-y-4">
                 <div>
                   <label className={`block text-xs mb-1 ${textMuted} flex items-center`}><User size={12} className="mr-1"/> Nombre visible para compañeros</label>
                   <input name="displayName" aria-label="Nombre visible del perfil" type="text" placeholder="Ej. Maxi" defaultValue={userProfile.displayName} maxLength={40} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} />
@@ -1797,7 +1798,7 @@ function SessionApp({ user, hasAdminClaim }) {
             
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 id="section-diagram" className="font-bold flex items-center mb-4 scroll-mt-24"><Calendar size={18} className="mr-2 text-emerald-500"/> Configuración de Diagrama</h3>
-              <form onSubmit={updateRoster} aria-busy={pendingWrites>0 && !isOffline} className="space-y-4">
+              <form onSubmit={updateRoster} className="space-y-4">
                 <label className="block text-sm">Tipo de actualización<select name="changeMode" defaultValue={rosterSaved ? 'change' : 'correction'} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}><option value="change">Cambiar permanentemente desde una fecha</option><option value="correction">Corregir la configuración que rige en esa fecha</option></select></label>
                 <label className="block text-sm">Fecha de vigencia o configuración a corregir<input name="effectiveDate" type="date" required defaultValue={today} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}/></label>
                 <p className={`text-xs ${textMuted}`}>Un cambio conserva los días anteriores. Una corrección modifica el período elegido, incluido su pasado. No modifica compensatorios.</p>

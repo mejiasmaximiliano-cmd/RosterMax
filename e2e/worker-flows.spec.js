@@ -108,6 +108,7 @@ test('licencia médica modifica disponibilidad, permite una cita y vuelve al ros
   await page.getByRole('combobox', { name: 'Categoría', exact: true }).selectOption('health');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Turno de seguimiento' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Guardar plan', exact:true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: 'Roster', exact: true }).click();
   await calendar.getByRole('button', { name: /^jueves,? 17 de septiembre: Trabajo/ }).click();
   await expect(calendar.getByText('Día 4 de 7 de trabajo', { exact: true })).toBeVisible();
