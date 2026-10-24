@@ -1,3 +1,4 @@
+import { openConfiguration } from './helpers/configuration';
 import { Buffer } from 'node:buffer';
 import { test, expect } from '@playwright/test';
 
@@ -31,7 +32,7 @@ test.afterEach(async ({ page }, testInfo) => {
 });
 
 async function finishOnboarding(page) {
-  await page.goto('/');
+  await page.goto('/'); await openConfiguration(page);
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Comenzar', exact: true }).click();
   await dialog.getByLabel('Días trabajando').fill('7');

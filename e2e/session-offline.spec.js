@@ -1,3 +1,4 @@
+import { openConfiguration } from './helpers/configuration';
 import { test, expect } from '@playwright/test';
 
 const TODAY = '2026-09-14';
@@ -50,7 +51,7 @@ async function userId(page) {
 }
 
 async function finishOnboarding(page, name, navigate = true) {
-  if (navigate) await page.goto('/');
+  if (navigate) await page.goto('/'); await openConfiguration(page);
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Comenzar', exact: true }).click();
   await dialog.getByLabel('Días trabajando').fill('7');
@@ -163,7 +164,7 @@ test('una cuenta nueva no publica ni guarda el roster predeterminado antes de co
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   const uid = await userId(page);
-  await dialog.getByRole('button', { name: 'Lo haré más tarde', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Omitir presentación', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Configura tu primer roster', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Calendario de roster' })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: 'Ajustes', exact: true }).click();

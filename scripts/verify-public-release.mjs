@@ -15,6 +15,10 @@ const read = async (path) => {
 };
 const version = JSON.parse((await read('/version.json')).body);
 if (version.commit !== expected || version.environment !== 'production') throw new Error('The public alias is not serving the expected production commit.');
+const nonce = `release-check-${Date.now()}`;
+const networkResult = await read(`/api/version?check=${nonce}`);
+const checked = JSON.parse(networkResult.body);
+if (checked.checkedNonce !== nonce || checked.commit !== expected || checked.build !== version.build || !Number.isFinite(Date.parse(checked.checkedAt))) throw new Error('Network version proof does not match this request/deployment.');
 const html = await read('/');
 const worker = await read('/sw.js');
 if (!worker.body.includes(version.build)) throw new Error('Worker and version manifest differ.');
@@ -53,9 +57,9 @@ try {
   const cache = await page.evaluate(async () => ({ controller: Boolean(navigator.serviceWorker.controller), keys: await caches.keys() }));
   if (!cache.keys.some((key) => key.endsWith(version.build))) throw new Error('Published complete PWA cache is absent.');
   if (errors.length || unexpectedNetwork.length) throw new Error('Unexpected runtime or public-resource failure.');
-  await mkdir('audit/release', { recursive: true });
-  await page.screenshot({ path: 'audit/release/production-readonly-session-gate-390.png' });
-  const result = { checkedAt: new Date().toISOString(), origin, version, htmlStatus: 200, resources, denials, browser: { pageErrors: errors, unexpectedPublicNetwork: unexpectedNetwork, blockedBackendRequests: blocked, cache, scope: 'REAL production assets/worker execution. Auth deliberately intercepted BEFORE account creation; expected session-error screenshot is NOT a production outage. No real-session navigation, OAuth, data writes or physical-phone claims.' } };
-  await writeFile('audit/release/production-check.json', JSON.stringify(result, null, 2));
+  await mkdir('audit/welcome', { recursive: true });
+  await page.screenshot({ path: 'audit/welcome/production-readonly-session-gate-390.png' });
+  const result = { checkedAt: new Date().toISOString(), origin, version, networkVersionProof: { nonceMatched: true, commitMatched: true, checkedAt: checked.checkedAt }, htmlStatus: 200, resources, denials, browser: { pageErrors: errors, unexpectedPublicNetwork: unexpectedNetwork, blockedBackendRequests: blocked, cache, scope: 'REAL production assets/worker execution. Auth deliberately intercepted BEFORE account creation; expected session-error screenshot is NOT a production outage. No real-session navigation, OAuth, data writes or physical-phone claims.' } };
+  await writeFile('audit/welcome/production-check.json', JSON.stringify(result, null, 2));
   process.stdout.write(JSON.stringify({ checkedAt: result.checkedAt, version, resources: resources.length, denials, unexpectedErrors: errors.length + unexpectedNetwork.length, productionWrites: 0, note: result.browser.scope }, null, 2) + '\n');
 } finally { await context.close(); await browser.close(); }

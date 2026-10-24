@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, ShieldCheck } from 'lucide-react';
 import { getAudienceSummary } from '../lib/analytics';
+import { filterMeasuredAccounts } from '../lib/audienceCoverage';
 
 const time = (value) => value ? new Intl.DateTimeFormat('es-AR', { dateStyle: 'medium', timeStyle: 'short' }).format(value) : '—';
 function Metric({ label, value, hint, source, period, updatedAt, coverage, light }) {
@@ -13,7 +14,8 @@ export default function CeoAudiencePanel({ theme, census, censusState, activityS
   const [excludeOwner, setExcludeOwner] = useState(false), [testIds, setTestIds] = useState('');
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer); }, []);
-  const filtered = activityDocs?.filter((d) => !(excludeOwner && d.ownerUid === ownerUid) && !testIds.split(/[\s,]+/).filter(Boolean).includes(d.ownerUid));
+  const coverage = filterMeasuredAccounts(activityDocs, [...(excludeOwner ? [ownerUid] : []), ...testIds.split(/[\s,]+/).filter(Boolean)]);
+  const filtered = coverage.rows;
   const measuredAudience = filtered ? getAudienceSummary(filtered, now) : audience;
   const light = theme === 'light', card = 'rounded-2xl border p-5 ' + (light ? 'bg-white border-slate-200' : 'bg-slate-900/60 border-slate-800');
   const generatedAt = census?.generatedAt?.seconds ? new Date(census.generatedAt.seconds * 1000) : null;
@@ -54,7 +56,8 @@ export default function CeoAudiencePanel({ theme, census, censusState, activityS
       {activityState === 'error' && <p role="alert" className="mt-3 text-amber-500">La actualización falló. Conservamos la última muestra válida; “—” significa que no existe una lectura confirmada.</p>}
       {activityState === 'loading' && <p role="status" className="mt-3">Cargando actividad…</p>}
       {activityState === 'stale' && <p role="status" className="mt-3 text-amber-500">Muestra guardada sin actualización de servidor.</p>}
-      {activityKnown && measuredAudience.measuredUsers === 0 && <p className="mt-3 text-sm">Sin muestra de actividad. Puede haber usuarios e instalaciones aunque nadie haya activado las métricas.</p>}
+      <div aria-label="Cobertura de actividad antes y después de filtros" className="mt-3 rounded-xl border border-blue-500/30 p-3 text-sm"><p>Antes de filtros: {activityKnown ? coverage.before : '—'} cuentas medidas · Excluidas: {activityKnown ? coverage.excluded : '—'} · Incluidas: {activityKnown ? coverage.included : '—'}.</p>{activityKnown && coverage.before === 0 && <p className="mt-2">No hay medición original disponible: puede haber usuarios que no hayan consentido medir.</p>}{activityKnown && coverage.before > 0 && coverage.included === 0 && <p className="mt-2">La muestra quedó vacía por los filtros aplicados; sí hay medición antes de excluir cuentas.</p>}</div>
+      <details className="mt-3 rounded-xl border border-slate-500/20 p-3 text-sm"><summary className="min-h-11 cursor-pointer py-2 font-semibold">Ayuda del CEO: cómo interpretar esta muestra</summary><p>Antes cuenta las cuentas medidas únicas conservadas, no el censo. Excluidas cuenta solo las identificaciones seleccionadas que existen en esa muestra; no cuenta UID inexistentes ni duplicados. Incluidas es la diferencia. Actividad de 24 horas, 7 y 30 días usa la última actividad medida, no aperturas. Estos filtros no cambian el censo ni las campañas. Esta ayuda solo se carga dentro del panel protegido.</p></details>
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
         <Metric {...voluntary} period="todo lo conservado" label="Cuentas con medición" value={measured('measuredUsers')} hint="Documentos voluntarios actuales tras exclusiones; no todo el censo."/>
         {[['activeDay','24 h'], ['activeWeek','7 días'], ['activeMonth','30 días']].map(([key,label]) => <Metric key={key} {...voluntary} period={'ventana móvil de '+label} label={'Activas medidas · '+label} value={measured(key)} hint="Cuentas cuya última actividad visible medida ocurrió dentro de la ventana; no personas ni aperturas."/> )}

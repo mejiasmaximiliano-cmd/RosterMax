@@ -31,3 +31,4 @@ jobs:
             test-results/
             audit/integral/
             audit/release/
+            audit/welcome/

@@ -5,17 +5,18 @@ export const FEATURE_TYPES = {
 };
 export function summarizeFeatureEvents(events, { now = new Date(), days = 30, excludedUids = [] } = {}) {
   const totals = Object.fromEntries(Object.keys(FEATURE_TYPES).map((type) => [type, 0]));
-  const seen = new Set(), accounts = new Set();
+  const seen = new Set(), accounts = new Set(), before = new Set();
   let since = null, excluded = 0, invalid = 0;
   for (const event of events || []) {
     const ms = event.occurredAt?.seconds * 1000;
     if (!event.id || seen.has(event.id)) continue;
     seen.add(event.id);
-    if (!Object.hasOwn(totals, event.type) || !Number.isFinite(ms) || ms <= 0 || ms > now.getTime()) { invalid++; continue; }
+    if (!Object.hasOwn(totals, event.type) || typeof event.ownerUid !== 'string' || !event.ownerUid || !Number.isFinite(ms) || ms <= 0 || ms > now.getTime()) { invalid++; continue; }
     if (since === null || ms < since) since = ms;
-    if (excludedUids.includes(event.ownerUid)) { excluded++; continue; }
     if (now.getTime() - ms > days * 86400000) continue;
+    before.add(event.ownerUid);
+    if (excludedUids.includes(event.ownerUid)) { excluded++; continue; }
     totals[event.type]++; accounts.add(event.ownerUid);
   }
-  return { totals, accounts: accounts.size, since, excluded, invalid };
+  return { totals, accounts: accounts.size, beforeAccounts: before.size, excludedAccounts: before.size - accounts.size, since, excluded, invalid };
 }

@@ -6,7 +6,7 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#020617",
+  "background_color": "#f8fafc",
   "theme_color": "#10b981",
   "description": "Organiza tu roster, tus francos y tus metas en un solo lugar.",
   "categories": ["productivity", "finance", "utilities"],

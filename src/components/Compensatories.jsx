@@ -7,7 +7,7 @@ import { buildCompensatoryCsv, debtStatus, localInformativeDate } from '../lib/c
 
 const makeDraft = (today, extra = {}) => ({ id: crypto.randomUUID(), kind: 'open', direction: 'company_owes', informativeDate: today, quantity: '', note: '', ...extra });
 
-export default function Compensatories({ user, theme, today, onConfirmed, onPendingChange }) {
+export default function Compensatories({ user, theme, today, onConfirmed, onPendingChange, onHelp }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => makeDraft(today));
   const [showForm, setShowForm] = useState(false);
@@ -37,12 +37,13 @@ export default function Compensatories({ user, theme, today, onConfirmed, onPend
   const known = state === 'ready' || debts.length > 0;
   const balanceCards = <div className="grid grid-cols-1 min-[360px]:grid-cols-2 gap-3">{Object.entries(COMPENSATORY_DIRECTIONS).map(([direction, label]) => <div key={direction} className={`rounded-xl p-3 ${direction === 'company_owes' ? 'bg-emerald-500/10' : 'bg-amber-500/10'}`}><p className="text-sm font-semibold">{label}</p><p className="mt-1 text-2xl font-black">{known ? formatCompensatoryDays(balances[direction]) : '—'} <span className="text-sm font-normal">días</span></p></div>)}</div>;
   return <>
-    <section aria-label="Mis compensatorios" className={card}>
+    <section id="section-compensatories" aria-label="Mis compensatorios" className={`${card} scroll-mt-24`}>
       <h3 className="mb-3 flex items-center gap-2 font-bold"><Scale size={20} className="text-indigo-500"/>Compensatorios personales</h3>
       {balanceCards}
       <p className="mt-3 text-sm opacity-75">Tu registro de días pendientes, separado de tu calendario. Sólo tú puedes consultarlo.</p>
       {(outbox.some((item) => item.status === 'queued') || debts.some((item) => item.pending)) && <p role="status" className="mt-2 text-sm text-amber-500">Guardado local · pendiente de confirmación del servidor</p>}
       <button type="button" onClick={() => setOpen(true)} className={`${button} mt-3 flex w-full items-center justify-center gap-2`}>Ver historial y registrar<ArrowRight size={16}/></button>
+      <button type="button" onClick={() => onHelp?.('compensatories')} className="mt-2 min-h-11 text-sm font-semibold underline">Ayuda sobre compensatorios</button>
     </section>
     {open && <Modal title="Compensatorios" theme={theme} onClose={() => setOpen(false)}>
       <fieldset disabled={busy} className="space-y-5 min-w-0">

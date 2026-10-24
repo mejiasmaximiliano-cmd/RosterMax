@@ -18,8 +18,8 @@ async function localOnly(context) {
 test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y cifras grandes sin desbordes', async ({ page, context }) => {
   await localOnly(context); await page.setViewportSize({ width: 390, height: 844 });
   const errors = []; page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto('/'); await page.getByRole('button', { name: 'Lo haré más tarde' }).click();
-  await mkdir('audit/release', { recursive: true });
+  await page.goto('/'); await page.getByRole('button', { name: 'Omitir presentación' }).click();
+  await mkdir('audit/welcome/regression', { recursive: true });
   for (const [theme, label] of [['light', 'Claro'], ['dark', 'Oscuro']]) {
     await page.getByRole('navigation').getByRole('button', { name: 'Ajustes', exact: true }).click();
     await page.getByRole('button', { name: label, exact: true }).click();
@@ -40,7 +40,7 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
     await page.getByRole('button', { name: 'Guardar movimiento' }).scrollIntoViewIfNeeded();
     const bounds = await page.getByRole('button', { name: 'Guardar movimiento' }).boundingBox();
     expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(420);
-    await page.screenshot({ path: `audit/release/dialogo-teclado-${theme}-390.png` });
+    await page.screenshot({ path: `audit/welcome/regression/dialogo-teclado-${theme}-390.png` });
     await page.keyboard.press('Escape'); await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
     await page.getByText('Editar presupuesto mensual', { exact: true }).click();
@@ -49,10 +49,10 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
     await expect(page.getByText(/Presupuesto de .* guardado en ARS/)).toBeVisible();
     await expect(page.getByText('Disponible estimado', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    await page.screenshot({ path: `audit/release/finanzas-${theme}-390.png`, fullPage: true });
+    await page.screenshot({ path: `audit/welcome/regression/finanzas-${theme}-390.png`, fullPage: true });
     // Check fixed navigation on a real viewport screenshot, not a full-page stitching artifact.
     const nav = await page.getByRole('navigation').boundingBox(); expect(nav.y + nav.height).toBeLessThanOrEqual(844);
-    await page.screenshot({ path: `audit/release/navegacion-${theme}-390.png` });
+    await page.screenshot({ path: `audit/welcome/regression/navegacion-${theme}-390.png` });
   }
   expect(errors).toEqual([]);
 });
@@ -74,12 +74,12 @@ test('medición de carga inicial compilada local, tres contextos fríos; recurso
       const context = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
       await localOnly(context); const page = await context.newPage();
       await page.goto('http://127.0.0.1:5587/');
-      await expect(page.getByRole('button', { name: 'Comenzar', exact: true })).toBeVisible();
+      await expect(page.getByRole('dialog', { name: 'Conocé RosterMax', exact: true })).toBeVisible();
       const result = await page.evaluate(() => ({ navigation: performance.getEntriesByType('navigation').map((entry) => ({ domContentLoadedMs: entry.domContentLoadedEventEnd, loadMs: entry.loadEventEnd })), assets: performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/assets/')).map((entry) => ({ name: entry.name.split('/').at(-1), bytes: entry.encodedBodySize, durationMs: entry.duration })) }));
       expect(result.assets.some((asset) => /FinancePanel|CeoAudiencePanel|CeoOperationsPanel|PlannerPanel/.test(asset.name))).toBe(false);
       runs.push(result);
       if (i === 2) {
-        await page.getByRole('button', { name: 'Lo haré más tarde' }).click();
+        await page.getByRole('button', { name: 'Omitir presentación' }).click();
         await page.route('**/assets/FinancePanel-*.js', (route) => route.abort());
         await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact:true }).click();
         await expect(page.getByRole('heading', { name: 'No pudimos abrir esta sección', exact:true })).toBeVisible();
@@ -88,7 +88,7 @@ test('medición de carga inicial compilada local, tres contextos fríos; recurso
       }
       await context.close();
     }
-    await mkdir('audit/release', { recursive: true });
-    await writeFile('audit/release/initial-load-local.json', JSON.stringify({ environment: 'LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV', runs }, null, 2));
+    await mkdir('audit/welcome/regression', { recursive: true });
+    await writeFile('audit/welcome/regression/initial-load-local.json', JSON.stringify({ environment: 'LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV', runs }, null, 2));
   } finally { await new Promise((done) => server.close(done)); }
 });

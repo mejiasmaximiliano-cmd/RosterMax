@@ -3,6 +3,9 @@ const CACHE_PREFIX = 'rostermax-complete-';
 const CACHE_NAME = CACHE_PREFIX + '__BUILD_ID__';
 const APP_SHELL = ['/', '/manifest.json', '/logo.svg', '/favicon.svg'];
 const LAZY_ASSETS = [/*__PRECACHE_ASSETS__*/];
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'GET_ROSTERMAX_VERSION') event.ports?.[0]?.postMessage({ type: 'ROSTERMAX_VERSION', build: CACHE_NAME.slice(CACHE_PREFIX.length) });
+});
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {

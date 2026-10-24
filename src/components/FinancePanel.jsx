@@ -142,7 +142,7 @@ export default function FinancePanel({ theme = 'dark', today, config, settings =
     runAction(`delete-${deleteTarget.id}`, () => deleteTarget.type === 'goal' ? onDeleteGoal(deleteTarget.id) : onDeleteExpense(deleteTarget.id), deleteTarget.type === 'goal' ? 'Meta eliminada.' : 'Gasto eliminado.', () => setDeleteTarget(null));
   }
 
-  return <section className="space-y-5 pb-6 animate-in fade-in duration-300" aria-labelledby="finance-heading">
+  return <section id="section-wealth" className="space-y-5 pb-6 animate-in fade-in duration-300" aria-labelledby="finance-heading">
     <header><div className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-500"><WalletCards size={23}/></div><div><h2 id="finance-heading" className="text-2xl font-black tracking-tight">Tu dinero, con un plan</h2><p className={`mt-1 text-sm ${styles.muted}`}>Ordena el mes y aprovecha mejor tu franco.</p></div></div></header>
 
     {message && <div role={message.type === 'error' ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${message.type === 'error' ? 'border-red-400/40 bg-red-500/10 text-red-500' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'}`}>{message.text}</div>}

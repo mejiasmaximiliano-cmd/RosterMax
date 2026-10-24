@@ -1,3 +1,4 @@
+import { openConfiguration } from './helpers/configuration';
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 
@@ -15,7 +16,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 async function setup(page) {
-  await page.goto('/');
+  await page.goto('/'); await openConfiguration(page);
   await page.getByRole('button', { name:'Comenzar', exact:true }).click();
   await page.getByLabel('Días trabajando').fill('14');
   await page.getByLabel('Días de franco').fill('14');
@@ -37,9 +38,9 @@ async function dates(page) {
   });
 }
 async function screenshot(page, name) {
-  await mkdir('audit/release', { recursive:true });
+  await mkdir('audit/welcome/regression', { recursive:true });
   if (name.startsWith('compensatorios')) await page.getByRole('dialog').evaluate((dialog) => { dialog.scrollTop = 0; });
-  await page.screenshot({ path:`audit/release/${name}.png`, fullPage:!name.startsWith('compensatorios') });
+  await page.screenshot({ path:`audit/welcome/regression/${name}.png`, fullPage:!name.startsWith('compensatorios') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
 }
 

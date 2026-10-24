@@ -12,6 +12,11 @@ async function seed(request, path, fields) {
 }
 
 test('CEO separa cuentas reales de actividad voluntaria y conserva privacidad', async ({ page, request }, testInfo) => {
+  // This fixed localhost/demo-project collection is isolated test data. Repeated
+  // local runs must not inherit another test's voluntary-activity fixtures.
+  const activityUrl = `${DOCUMENTS}/${ROOT}/public/data/activity`;
+  const previous = await request.get(activityUrl, { headers: { Authorization: 'Bearer owner' } });
+  for (const row of (await previous.json()).documents || []) await request.delete(`${activityUrl}/${row.name.split('/').at(-1)}`, { headers: { Authorization: 'Bearer owner' } });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.clock.setFixedTime(new Date(NOW));
@@ -25,7 +30,7 @@ test('CEO separa cuentas reales de actividad voluntaria y conserva privacidad', 
     return route.abort();
   });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Lo haré más tarde' }).click();
+  await page.getByRole('button', { name: 'Omitir presentación' }).click();
   const navigation = page.getByRole('navigation');
   await expect(navigation.getByRole('button', { name: 'CEO', exact: true })).toHaveCount(0);
   const uid = await page.evaluate(async () => (await import('/src/lib/firebase.js')).auth.currentUser.uid);
@@ -42,7 +47,7 @@ test('CEO separa cuentas reales de actividad voluntaria y conserva privacidad', 
   const audience = page.getByRole('region', { name: 'Cuentas y actividad del CEO' });
   await expect(audience.getByText('Cuentas guardadas', { exact: true }).locator('..')).toContainText('4');
   await expect(audience.getByText('Cuentas de invitado', { exact: true }).locator('..')).toContainText('146');
-  await expect(audience.getByText('Sin muestra de actividad.', { exact: false })).toBeVisible();
+  await expect(audience.getByText('No hay medición original disponible:', { exact: false })).toBeVisible();
   await expect(audience.getByText('Cuentas con medición', { exact: true }).locator('..')).toContainText('0');
   await seed(request, `public/data/activity/${uid}`, {
     ownerUid: { stringValue: uid }, accountType: { stringValue: 'google' },

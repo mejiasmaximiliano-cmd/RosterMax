@@ -1,3 +1,4 @@
+import { openConfiguration } from './helpers/configuration';
 import { test, expect } from '@playwright/test';
 
 const TODAY = '2026-09-14';
@@ -39,7 +40,7 @@ test.afterEach(async ({ page }, testInfo) => {
 });
 
 async function finishOnboarding(page, name = 'Trabajador de prueba') {
-  await page.goto('/');
+  await page.goto('/'); await openConfiguration(page);
   await page.getByRole('button', { name: 'Comenzar', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Días trabajando').fill('7');

@@ -1,3 +1,4 @@
+import { openConfiguration } from './helpers/configuration';
 import { test, expect } from '@playwright/test';
 
 const ROOT = 'artifacts/roster-max-production';
@@ -13,7 +14,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 async function setup(page) {
-  await page.goto('/'); await page.getByRole('button',{name:'Comenzar',exact:true}).click();
+  await page.goto('/'); await openConfiguration(page); await page.getByRole('button',{name:'Comenzar',exact:true}).click();
   await page.getByLabel('Días trabajando').fill('7'); await page.getByLabel('Días de franco').fill('7');
   await page.getByRole('button',{name:'Guardar y continuar'}).click();
   await page.getByLabel('Nombre visible',{exact:true}).fill('Prueba ficticia de privacidad');
@@ -54,8 +55,8 @@ test('retirar, recargar y reactivar la compartición no recrea un enlace retirad
   const settings = async () => (await (await request.get(`${API}/${ROOT}/users/${uid}/settings/sync`,{headers})).json()).fields;
   const first = (await settings()).code.stringValue;
   await expect.poll(async () => (await request.get(`${API}/${ROOT}/public/data/sync_codes/${first}`,{headers})).status()).toBe(200);
-  page.once('dialog',(dialog) => dialog.accept());
-  await page.getByRole('button',{name:'Dejar de compartir mi roster'}).click();
+  await page.getByRole('button',{name:'Dejar de compartir con todos', exact:true}).click();
+  await page.getByRole('dialog',{name:'Dejar de compartir con todos', exact:true}).getByRole('button',{name:'Dejar de compartir con todos', exact:true}).click();
   await expect(page.getByRole('button',{name:'Reactivar con un código nuevo'})).toBeEnabled();
   expect((await settings()).enabled.booleanValue).toBe(false);
   await page.reload();
@@ -63,7 +64,7 @@ test('retirar, recargar y reactivar la compartición no recrea un enlace retirad
   await expect(page.getByRole('button',{name:'Reactivar con un código nuevo'})).toBeEnabled();
   expect((await request.get(`${API}/${ROOT}/public/data/sync_codes/${first}`,{headers})).status()).toBe(404);
   await page.getByRole('button',{name:'Reactivar con un código nuevo'}).click();
-  await expect(page.getByRole('button',{name:'Dejar de compartir mi roster'})).toBeEnabled();
+  await expect(page.getByRole('button',{name:'Dejar de compartir con todos'})).toBeEnabled();
   const next = (await settings()).code.stringValue;
   expect(next).not.toBe(first);
   await expect.poll(async () => (await request.get(`${API}/${ROOT}/public/data/sync_codes/${next}`,{headers})).status()).toBe(200);

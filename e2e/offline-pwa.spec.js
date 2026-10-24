@@ -36,7 +36,7 @@ test('compensatorios: recarga PWA realmente offline, conserva pendientes y sincr
   try {
     const before = await entries();
     await page.goto('http://127.0.0.1:5588/');
-    await page.getByRole('button',{name:'Lo haré más tarde'}).click();
+    await page.getByRole('button',{name:'Omitir presentación'}).click();
     await page.evaluate(async () => { await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready; });
     await page.reload();
     await expect(page.getByRole('region',{name:'Mis compensatorios'})).toContainText('0 días');

@@ -110,7 +110,7 @@ function PlannerContent({ theme = 'dark', today, config, tasks = [], initialDate
     runAction(`reschedule-${task.id}`, () => onSaveTask({ ...task, date: nextRest.startDate }), `Plan reprogramado al ${formatDate(nextRest.startDate)}.`, () => chooseFilter('rest'));
   };
 
-  return <div className="space-y-5 animate-in fade-in duration-500">
+  return <div id="section-planner" className="space-y-5 animate-in fade-in duration-500">
     <div className="flex items-center justify-between gap-3"><div><h2 className="text-2xl font-black">Tu tiempo de franco</h2><p className={`text-xs mt-1 ${muted}`}>Haz espacio para lo que quieres resolver y disfrutar.</p></div><button type="button" onClick={() => newPlan()} disabled={Boolean(pending)} className={`${primary} flex shrink-0 items-center gap-1.5`}><Plus size={17}/><span>Nuevo plan</span></button></div>
     <section className={`rounded-2xl border p-4 sm:p-5 ${card}`}>
       <h3 className="text-sm font-bold flex gap-2 items-center"><CalendarDays size={18} className="text-emerald-500"/>{nextRest?.startDate === today ? 'Tu franco actual' : 'Tu próximo franco'}</h3>

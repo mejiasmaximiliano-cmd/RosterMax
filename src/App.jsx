@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { 
   Calendar, CheckSquare, TrendingUp, User, 
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
@@ -15,7 +15,7 @@ import {
 import { 
   GoogleAuthProvider, signInWithPopup, linkWithPopup, signOut, reauthenticateWithPopup,
 } from 'firebase/auth';
-import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { doc, setDoc, collection, onSnapshot, addDoc, deleteDoc, getDoc, getDocFromServer, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { APP_ID, auth, db, appEnvironment } from './lib/firebase';
 import {
   SCHEDULE_EXCEPTION_TYPES,
@@ -57,10 +57,16 @@ import { useCeoData } from './lib/useCeoData';
 import { getCalendarDayLabel } from './lib/calendar';
 import PwaUpdateNotice from './components/PwaUpdateNotice';
 import SectionBoundary from './components/SectionBoundary';
+import WelcomeStories from './components/WelcomeStories';
+import { welcomeState } from './lib/welcomeState';
+const HelpCenter = lazy(() => import('./components/HelpCenter'));
+const themeKey = (uid) => `rostermax:theme:${APP_ID}:${uid}`;
+function cachedTheme(uid) { try { return localStorage.getItem(themeKey(uid)) === 'dark' ? 'dark' : 'light'; } catch { return 'light'; } }
+function rememberTheme(uid, mode) { try { localStorage.setItem(themeKey(uid), mode); } catch { /* Firestore remains the authority. */ } }
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
-const APP_VERSION = 'beta-0.7';
+const APP_VERSION = 'beta-0.8';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -166,7 +172,30 @@ function SessionApp({ user, hasAdminClaim }) {
   // --- STATES ---
   const today = useToday();
   const [activeTab, setActiveTab] = useState(() => getInviteCodeFromLocation() ? 'crew' : 'roster');
-  const [theme, setTheme] = useState('dark'); 
+  const [theme, setTheme] = useState(() => cachedTheme(user.uid));
+  const themeIntent = useRef(null);
+  useLayoutEffect(() => { document.documentElement.dataset.theme = theme; document.documentElement.style.colorScheme = theme; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#f8fafc' : '#020617'); }, [theme]);
+  const [onboardingCompleted, setOnboardingCompleted] = useState(false);
+  const [profileStored, setProfileStored] = useState(false);
+  const [welcomeRequest, setWelcomeRequest] = useState(0);
+  const [helpQuestion, setHelpQuestion] = useState(null);
+  const [sharingConfirm, setSharingConfirm] = useState(false);
+  const [sharingError, setSharingError] = useState('');
+  const [removeFriend, setRemoveFriend] = useState(null);
+  const [removeError, setRemoveError] = useState('');
+  const [removing, setRemoving] = useState(false);
+  const openHelp = (question = '') => setHelpQuestion(question);
+  const [helpReturn, setHelpReturn] = useState(false);
+  const [helpDestination, setHelpDestination] = useState(null);
+  const sharingBusyRef = useRef(false);
+  useEffect(() => {
+    if (!helpDestination) return undefined;
+    const focus = () => { const node = document.getElementById(`section-${helpDestination.target}`); if (!node) return false; node.setAttribute('tabindex', '-1'); node.scrollIntoView({ block: 'start', behavior: 'instant' }); node.focus({ preventScroll: true }); return true; };
+    const observer = new MutationObserver(() => { if (focus()) observer.disconnect(); });
+    const frame = requestAnimationFrame(() => { if (!focus()) observer.observe(document.getElementById('root'), { childList: true, subtree: true }); });
+    const timer = setTimeout(() => observer.disconnect(), 5000);
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer); observer.disconnect(); };
+  }, [helpDestination, activeTab]);
   const [addMethod, setAddMethod] = useState(() => getInviteCodeFromLocation() ? 'sync' : 'manual');
   
   // States: UX, PWA, Admin & Auth
@@ -387,39 +416,46 @@ function SessionApp({ user, hasAdminClaim }) {
   useEffect(() => onSnapshot(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'sync'), { includeMetadataChanges: true }, (snapshot) => {
     if (!snapshot.exists()) return;
     const data = snapshot.data();
+    if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
     setSharingEnabled(data.enabled !== false);
     if (isValidSyncCode(data.code)) setSyncCode(data.code);
-    if (data.enabled === false) setSyncState('disabled');
+    setSyncState(data.enabled === false ? 'disabled' : 'ready');
   }), [user.uid]);
 
   const changeSharing = async () => {
-    if (sharingBusy || isOffline) { showToast('Conéctate para confirmar el cambio de acceso.'); return; }
-    if (sharingEnabled && !window.confirm('Se invalidarán tu código y los enlaces anteriores para todos. Los datos ya vistos o copiados por otra persona no pueden borrarse de su dispositivo. ¿Dejar de compartir?')) return;
-    setSharingBusy(true);
+    if (sharingBusyRef.current || isOffline) { showToast('Conectate para confirmar el cambio de acceso.'); return; }
+    sharingBusyRef.current = true; setSharingBusy(true); setSharingError('');
+    const wasEnabled = sharingEnabled;
     try {
       const ref = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'sync');
       if (sharingEnabled) {
-        setSharingEnabled(false);
         const batch = writeBatch(db);
         batch.set(ref, { code: syncCode, enabled: false, updatedAt: serverTimestamp() }, { merge: true });
         batch.delete(getSyncCodeRef(syncCode));
         await batch.commit();
-        setSyncState('disabled'); showToast('Compartición retirada. Los enlaces anteriores ya no publican tu roster.');
+        setSharingEnabled(false); setSyncState('disabled'); setSharingConfirm(false); showToast('Dejaste de compartir con todos. El código anterior ya no da acceso a tu roster.');
       } else {
         const code = createSyncCode();
         if ((await getDoc(getSyncCodeRef(code))).exists()) throw new Error('code-collision');
         await setDoc(ref, { code, enabled: true, updatedAt: serverTimestamp() }, { merge: true });
         setSyncCode(code); setSharingEnabled(true); setSyncState('ready');
-        showToast('Nuevo código creado. Debes enviar nuevas invitaciones.');
+        showToast('Nuevo código creado. Tenés que enviar nuevas invitaciones.');
       }
-    } catch { setSyncState('error'); showToast('No se confirmó el cambio de acceso. Revisa tu conexión y recarga.'); }
-    finally { setSharingBusy(false); }
+    } catch {
+      try {
+        const current = await getDocFromServer(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'sync'));
+        const enabled = current.exists() && current.data().enabled !== false;
+        setSharingEnabled(enabled); setSyncState(enabled ? 'ready' : 'disabled');
+      } catch { setSharingEnabled(wasEnabled); setSyncState('error'); }
+      setSharingError('No se confirmó el cambio solicitado. Revisá el estado y tu conexión antes de volver a intentar.'); showToast('No se confirmó el cambio para compartir.');
+    }
+    finally { sharingBusyRef.current = false; setSharingBusy(false); }
   };
 
   // Publica únicamente el calendario compartible. Los motivos privados de
   // ausencias se eliminan antes de sincronizar con compañeros.
   useEffect(() => {
-    if (!user || !syncCode || !sharingEnabled || !sharedReady || !rosterSaved || isOffline) return;
+    if (!user || !syncCode || !sharingEnabled || !sharedReady || !rosterSaved || isOffline || sharingBusy) return;
     let cancelled = false;
     const publish = async () => {
       try {
@@ -437,7 +473,7 @@ function SessionApp({ user, hasAdminClaim }) {
     };
     publish();
     return () => { cancelled = true; };
-  }, [user, syncCode, sharingEnabled, userProfile, rosterConfig, scheduleExceptions, sharedReady, rosterSaved, isOffline, today]);
+  }, [user, syncCode, sharingEnabled, userProfile, rosterConfig, scheduleExceptions, sharedReady, rosterSaved, isOffline, today, sharingBusy]);
 
   // --- BASE DE DATOS PRIVADA EN TIEMPO REAL ---
   useEffect(() => {
@@ -470,11 +506,17 @@ function SessionApp({ user, hasAdminClaim }) {
         const data = snapshot.data();
         setUserProfile({ ...DEFAULT_PROFILE, ...data, weatherLocation: data.weatherLocation || DEFAULT_WEATHER_LOCATION });
       }
+      setProfileStored(snapshot.exists());
       markLoaded('profile');
       confirmShared('profile', snapshot);
     }, logRealtimeError('perfil'));
     const unsubTheme = watch(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), (snapshot) => {
-      if (snapshot.exists()) setTheme(snapshot.data().mode);
+      const mode = snapshot.exists() && snapshot.data().mode === 'dark' ? 'dark' : 'light';
+      if (themeIntent.current && mode !== themeIntent.current) return;
+      if (snapshot.exists() || !snapshot.metadata.fromCache || !navigator.onLine) {
+        setTheme(mode); markLoaded('theme');
+        if (!snapshot.metadata.fromCache) { rememberTheme(user.uid, mode); if (!snapshot.metadata.hasPendingWrites) themeIntent.current = null; }
+      }
     }, logRealtimeError('tema'));
     const unsubReminders = watch(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'reminders'), (snapshot) => {
       if (snapshot.exists()) setReminderSettings({ enabled: false, leadDays: 1, ...snapshot.data() });
@@ -488,8 +530,7 @@ function SessionApp({ user, hasAdminClaim }) {
       markLoaded('privacy');
     }, logRealtimeError('privacidad'));
     const unsubOnboarding = watch(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'onboarding'), (snapshot) => {
-      const completed = snapshot.exists() && snapshot.data().completed === true;
-      if (!completed && localStorage.getItem(ONBOARDING_DISMISS_KEY) !== '1') setShowOnboarding(true);
+      if (snapshot.exists() || !snapshot.metadata.fromCache || !navigator.onLine) { setOnboardingCompleted(snapshot.exists() && snapshot.data().completed === true); markLoaded('onboarding'); }
     }, logRealtimeError('guía inicial'));
     
     const unsubTasks = watch(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'tasks'), (s) => { setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))); markLoaded('tasks'); }, logRealtimeError('tareas'));
@@ -868,7 +909,7 @@ function SessionApp({ user, hasAdminClaim }) {
     if (!saved) return;
     localStorage.removeItem(ONBOARDING_DISMISS_KEY);
     setShowOnboarding(false);
-    setActiveTab(destination);
+    setActiveTab(pendingInviteCode ? 'crew' : destination);
   };
 
   const skipOnboarding = () => {
@@ -1051,8 +1092,11 @@ function SessionApp({ user, hasAdminClaim }) {
   };
 
   const toggleTheme = async (newTheme) => {
-    setTheme(newTheme);
-    if(user) await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), { mode: newTheme });
+    if (!['light', 'dark'].includes(newTheme) || !loaded.theme) return;
+    const previous = theme; themeIntent.current = newTheme; setTheme(newTheme);
+    rememberTheme(user.uid, newTheme);
+    try { await setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'settings', 'theme'), { mode: newTheme }); }
+    catch { themeIntent.current = null; setTheme(previous); rememberTheme(user.uid, previous); showToast('No se guardó la preferencia. Conservamos el tema anterior.'); }
   };
 
   const addGenericDoc = async (event, collectionName, fields) => {
@@ -1278,10 +1322,30 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const shouldShowAd = Boolean(currentAd);
 
-  if (!loaded.roster || !loaded.profile || !loaded.exceptions) return <main className="min-h-screen bg-slate-950 text-white grid place-items-center p-6"><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => window.location.reload()}>Volver a intentar</button>}</div></main>;
+  const { ready: welcomeReady, automatic: isNewForWelcome } = welcomeState({ themeKnown: loaded.theme, onboardingKnown: loaded.onboarding, rosterSaved, profileStored, completed: onboardingCompleted, rosterConfirmed: confirmed.roster, profileConfirmed: confirmed.profile, anonymous: user.isAnonymous, legacyDismissed: localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' });
+  const finishWelcome = () => { if (!rosterSaved) setShowOnboarding(true); else setActiveTab(pendingInviteCode ? 'crew' : 'roster'); };
+  const helpNavigate = (target) => {
+    setHelpQuestion(null); setHelpReturn(true);
+    const tab = ['roster','crew','planner','wealth'].includes(target) ? target : ['changes','compensatories'].includes(target) ? 'roster' : 'settings';
+    setActiveTab(tab);
+    setHelpDestination({ target }); window.scrollTo({ top: 0 });
+  };
+  const confirmRemoveFriend = async () => {
+    if (removing || !removeFriend) return;
+    if (isOffline || !navigator.onLine) { setRemoveError('Conectate para confirmar. No quitamos a nadie de tu lista.'); return; }
+    setRemoving(true); setRemoveError('');
+    try { await deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', removeFriend.id)); setRemoveFriend(null); showToast('Compañero quitado de tu lista. Su acceso no cambió.'); }
+    catch { setRemoveError('No se confirmó la eliminación de tu lista. Revisá la conexión y volvé a intentar.'); }
+    finally { setRemoving(false); }
+  };
+  if (!loaded.theme || !loaded.roster || !loaded.profile || !loaded.exceptions) return <main className={`min-h-screen ${dynamicTheme} grid place-items-center p-6`}><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => window.location.reload()}>Volver a intentar</button>}</div></main>;
 
   return (
     <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
+      {welcomeReady && !showOnboarding && !showExistingAccountConfirm && <WelcomeStories key={`${user.uid}:${welcomeRequest}`} theme={theme} storageKey={`rostermax:welcome-v1:${APP_ID}:${user.uid}`} isNew={isNewForWelcome} forceOpen={welcomeRequest > 0} hasRoster={rosterSaved} hasInvitation={Boolean(pendingInviteCode)} onDismiss={() => setWelcomeRequest(0)} onFinish={finishWelcome} onExisting={user.isAnonymous ? () => setShowExistingAccountConfirm(true) : undefined}/>}
+      {helpQuestion !== null && <Suspense fallback={<p role="status">Abriendo ayuda…</p>}><HelpCenter theme={theme} questionId={helpQuestion} onClose={() => setHelpQuestion(null)} onNavigate={helpNavigate} onStories={() => { setHelpQuestion(null); setWelcomeRequest((n) => n + 1); }}/></Suspense>}
+      {sharingConfirm && <Modal title="Dejar de compartir con todos" theme={theme} onClose={() => { if (!sharingBusy) setSharingConfirm(false); }}><div className="space-y-4 text-sm"><p>Se desactiva el código actual para todos los que lo tengan.</p><p>Conservás los compañeros de tu lista y todos tus datos.</p><p>Las copias que otros ya hayan visto o guardado pueden permanecer.</p><p>Reactivar genera un código nuevo que tenés que volver a enviar. No hay una revocación individual por compañero.</p>{sharingError && <p role="alert">{sharingError}</p>}<div className="flex flex-wrap gap-3"><button disabled={sharingBusy} onClick={() => setSharingConfirm(false)} className="min-h-11 rounded-xl border px-4 disabled:opacity-50">Cancelar</button><button disabled={sharingBusy} onClick={changeSharing} className="min-h-11 rounded-xl bg-blue-700 px-4 font-bold text-white disabled:opacity-50">{sharingBusy ? 'Confirmando…' : 'Dejar de compartir con todos'}</button></div></div></Modal>}
+      {removeFriend && <Modal title={`Quitar a ${removeFriend.name} de mi lista`} theme={theme} onClose={() => { if (!removing) setRemoveFriend(null); }}><div className="space-y-4 text-sm"><p>Vas a quitar a {removeFriend.name} de tu lista. Esto no revoca su acceso a tu roster ni te quita de su equipo.</p><p>Para invalidar el código actual para todos, usá “Dejar de compartir con todos” en Ajustes.</p>{removeError && <p role="alert">{removeError}</p>}<div className="flex flex-wrap gap-3"><button disabled={removing} onClick={() => setRemoveFriend(null)} className="min-h-11 rounded-xl border px-4">Cancelar</button><button disabled={removing} onClick={confirmRemoveFriend} className="min-h-11 rounded-xl bg-blue-700 px-4 font-bold text-white">{removing ? 'Confirmando…' : 'Quitar de mi lista'}</button></div></div></Modal>}
       {showOnboarding && user && (
         <OnboardingModal
           theme={theme}
@@ -1334,11 +1398,12 @@ function SessionApp({ user, hasAdminClaim }) {
       </header>
 
       <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6"><SectionBoundary key={activeTab} onHome={() => setActiveTab('roster')} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
-        <PwaUpdateNotice theme={theme} showControls={activeTab === 'settings'} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}/>
+        <PwaUpdateNotice onHelp={openHelp} theme={theme} showControls={activeTab === 'settings'} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}/>
+        {helpReturn && <button type="button" onClick={() => { setHelpReturn(false); openHelp(); }} className="min-h-11 text-sm font-bold underline">Volver a preguntas frecuentes</button>}
         {dataError && <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p>{dataError}</p><button onClick={() => window.location.reload()} className="mt-2 underline font-bold">Volver a cargar</button></div>}
         {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprueba la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
         {(compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)) ? <p role="status" className={`text-sm ${textMuted}`}>Guardado local · <span>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</span> No confirmado por el servidor.</p> : <p role="status" className={`text-xs ${textMuted}`}>{Object.values(privateSync).some((s) => s.cached) ? 'Datos locales · esperando comprobar el servidor' : 'Datos privados confirmados por el servidor'}</p>}
-        {!rosterSaved && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configura tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indica cuántos días trabajas, cuántos descansas y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="mt-3 bg-emerald-500 text-white rounded-xl px-4 py-3 font-bold">Configurar mi roster</button></div>}
+        {!rosterSaved && confirmed.roster && confirmed.profile && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configura tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indica cuántos días trabajas, cuántos descansas y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="mt-3 bg-emerald-500 text-white rounded-xl px-4 py-3 font-bold">Configurar mi roster</button></div>}
         
         {installPrompt && (
           <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
@@ -1361,7 +1426,7 @@ function SessionApp({ user, hasAdminClaim }) {
               <p className={`mt-1 text-xs ${textMuted}`}>Este resumen siempre corresponde a hoy; el calendario muestra la fecha que selecciones.</p>
             </div>}
 
-            <Compensatories user={user} theme={theme} today={today} onConfirmed={measureConfirmed} onPendingChange={setCompensatoriesPending}/>
+            <Compensatories user={user} theme={theme} today={today} onConfirmed={measureConfirmed} onPendingChange={setCompensatoriesPending} onHelp={openHelp}/>
 
             {!nextTransition?.error && (
               <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
@@ -1380,7 +1445,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
             <div ref={exceptionSectionRef} className={`scroll-mt-24 rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex items-start justify-between gap-3">
-                <div><h3 className="font-bold flex items-center"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después vuelves automáticamente a tu diagrama habitual.</p></div>
+                <div><h3 id="section-changes" className="font-bold flex items-center scroll-mt-24"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después vuelves automáticamente a tu diagrama habitual.</p></div>
                 <button type="button" onClick={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm((value) => !value); }} className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-3 text-xs font-bold text-white">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
               </div>
 
@@ -1473,7 +1538,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
         {/* TAB 2: CREW */}
         {activeTab === 'crew' && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
+          <div id="section-crew" tabIndex={-1} className="space-y-6 animate-in fade-in slide-in-from-right-4">
             <div className="mb-6">
                <HeaderTitle icon={Users} title="Proyector de Equipo" colorClass="text-blue-500" theme={theme} />
             </div>
@@ -1537,7 +1602,7 @@ function SessionApp({ user, hasAdminClaim }) {
                 {visibleFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
                     <div className="min-w-0"><p className="font-bold text-sm flex items-center break-words">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p><p className="mt-1 text-xs opacity-75">{friend.isSynced ? 'Vinculado' : 'Carga manual'}{friend.sharedUpdatedAt?.seconds ? ` · Última publicación: ${new Date(friend.sharedUpdatedAt.seconds * 1000).toLocaleString('es-AR')}${friend.sharedCached ? ' (copia local; sin comprobación reciente)' : ''}` : ' · sin fecha de actualización confirmada'}</p></div>
-                    <button onClick={() => { if (window.confirm('¿Quitar este compañero de tu lista? Esto no elimina tu código ni te quita de su equipo.')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id)), 'Compañero quitado de tu lista.'); }} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
+                    <button onClick={() => { setRemoveError(''); setRemoveFriend(friend); }} className="min-h-11 min-w-11 text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
                   </div>
                 ))}
                 {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
@@ -1600,7 +1665,8 @@ function SessionApp({ user, hasAdminClaim }) {
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
 
-            <h2 className="text-lg font-bold">Cuenta y sincronización</h2>
+            <section className={`rounded-2xl border p-5 ${cardClasses[theme]}`} aria-label="Ayuda y cómo usar RosterMax"><h2 className="font-bold">Ayuda y cómo usar RosterMax</h2><div className="mt-3 flex flex-wrap gap-3"><button onClick={() => setWelcomeRequest((n) => n + 1)} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Conocé RosterMax</button><button onClick={() => openHelp()} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Preguntas frecuentes</button><button onClick={() => helpNavigate('feedback')} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Reportar un problema</button></div></section>
+            <h2 id="section-account" className="text-lg font-bold scroll-mt-24">Cuenta y sincronización</h2><button onClick={() => openHelp('sync')} className="min-h-11 text-sm font-semibold underline">Ayuda sobre cuenta y sincronización</button>
             
             {/* ESTADO DE CUENTA INTELIGENTE */}
             {isPermanentlyLinked ? (
@@ -1646,7 +1712,8 @@ function SessionApp({ user, hasAdminClaim }) {
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold">Control de compartición</h3><p className={`mt-2 text-sm ${textMuted}`}>Quitar un compañero solo limpia tu lista. Para retirar el acceso de todos, desactiva la compartición. Al reactivarla tendrás un código nuevo; no borra copias ya vistas.</p><button type="button" onClick={changeSharing} disabled={sharingBusy || isOffline || syncState === 'loading'} className="mt-3 min-h-11 rounded-xl border border-blue-500 p-3 font-bold disabled:opacity-50">{sharingBusy ? 'Confirmando…' : sharingEnabled ? 'Dejar de compartir mi roster' : 'Reactivar con un código nuevo'}</button>
+              <h3 id="section-sharing" className="font-bold scroll-mt-24">Compartir mi roster</h3><p className={`mt-2 text-sm ${textMuted}`}>Quitar un compañero solo lo saca de tu lista. Acá podés desactivar el código para todos. Al reactivar, tenés que enviar el código nuevo; las copias ya vistas pueden permanecer.</p><button type="button" onClick={() => { setSharingError(''); if (sharingEnabled) setSharingConfirm(true); else changeSharing(); }} disabled={sharingBusy || isOffline || syncState === 'loading' || syncState === 'error'} className="mt-3 min-h-11 rounded-xl border border-blue-500 p-3 font-bold disabled:opacity-50">{sharingBusy ? 'Confirmando…' : sharingEnabled ? 'Dejar de compartir con todos' : 'Reactivar con un código nuevo'}</button>
+              {!sharingConfirm && sharingError && <p role="alert" className="mt-2 text-sm">{sharingError}</p>}<button onClick={() => openHelp('stop-sharing')} className="mt-2 min-h-11 text-sm font-semibold underline">¿Quién puede ver mi roster y cómo dejo de compartir?</button>
             </div>
 
 
@@ -1656,7 +1723,7 @@ function SessionApp({ user, hasAdminClaim }) {
             </button>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold flex items-center"><MessageSquare size={18} className="mr-2 text-blue-500"/> Feedback de la beta</h3>
+              <h3 id="section-feedback" className="font-bold flex items-center scroll-mt-24"><MessageSquare size={18} className="mr-2 text-blue-500"/> Feedback de la beta</h3>
               <p className={`text-[10px] mt-1 mb-4 ${textMuted}`}>Cuéntanos qué falló o qué función necesitas. No incluyas datos sensibles.</p>
               <form onSubmit={submitBetaFeedback} className="space-y-3">
                 <select name="category" className={`w-full rounded-xl px-3 py-2 text-sm border outline-none ${inputBg}`} defaultValue="problem">
@@ -1725,7 +1792,7 @@ function SessionApp({ user, hasAdminClaim }) {
             </div>
             
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold flex items-center mb-4"><Calendar size={18} className="mr-2 text-emerald-500"/> Configuración de Diagrama</h3>
+              <h3 id="section-diagram" className="font-bold flex items-center mb-4 scroll-mt-24"><Calendar size={18} className="mr-2 text-emerald-500"/> Configuración de Diagrama</h3>
               <form onSubmit={updateRoster} className="space-y-4">
                 <label className="block text-sm">Tipo de actualización<select name="changeMode" defaultValue={rosterSaved ? 'change' : 'correction'} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}><option value="change">Cambiar permanentemente desde una fecha</option><option value="correction">Corregir la configuración que rige en esa fecha</option></select></label>
                 <label className="block text-sm">Fecha de vigencia o configuración a corregir<input name="effectiveDate" type="date" required defaultValue={today} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}/></label>
@@ -1740,7 +1807,7 @@ function SessionApp({ user, hasAdminClaim }) {
               {(rosterConfig.periods || []).length > 0 && <details className="mt-3 text-sm"><summary>Historial de vigencias</summary><p>Base: {rosterConfig.workDays} × {rosterConfig.restDays}, ciclo {rosterConfig.startDate}</p>{rosterConfig.periods.map((p) => <p key={p.effectiveDate}>Desde {p.effectiveDate}: {p.workDays} × {p.restDays}, ciclo {p.startDate}</p>)}</details>}
             </div>
 
-            <h2 className="text-lg font-bold">Avisos</h2>
+            <h2 id="section-notices" className="text-lg font-bold scroll-mt-24">Avisos</h2>
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex gap-3">
@@ -1772,7 +1839,7 @@ function SessionApp({ user, hasAdminClaim }) {
               <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Al apagarlo borramos tu registro de actividad y dejamos de medir. Los conteos publicitarios anteriores se conservan asociados a tu identificador.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
             </div>
 
-            <PrivacyPanel user={user} theme={theme}/>
+            <div id="section-privacy" className="scroll-mt-24"><PrivacyPanel user={user} theme={theme}/></div>
             <h2 className="text-lg font-bold">Apariencia</h2>
             <div className={`rounded-2xl border p-5 space-y-4 mb-10 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center"><Sun size={18} className="mr-2 text-amber-500"/> Apariencia de Interfaz</h3>
