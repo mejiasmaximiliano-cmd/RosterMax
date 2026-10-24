@@ -1,5 +1,7 @@
 # RosterMax — informe de misión integral
 
+> Informe histórico de la fase local anterior. La autorización posterior de publicación y la entrega final se documentan en **ROSTERMAX_RELEASE_REPORT.md**. Las afirmaciones de “no publicado” de este documento corresponden exclusivamente a aquella fase.
+
 Fecha: 24/10/2026. Repositorio: mejiasmaximiliano-cmd/RosterMax.
 
 ## Resumen para el propietario

@@ -18,7 +18,7 @@ async function setup(page) {
   await page.goto('/');
   await page.getByRole('button', { name:'Comenzar', exact:true }).click();
   await page.getByLabel('Días trabajando').fill('14');
-  await page.getByLabel('Días de franco').fill('7');
+  await page.getByLabel('Días de franco').fill('14');
   await page.getByLabel('Inicio conocido del ciclo').fill('2026-10-01');
   await page.getByRole('button', { name:'Guardar y continuar' }).click();
   await page.getByLabel('Nombre visible', { exact:true }).fill('Prueba integral ficticia');
@@ -37,9 +37,9 @@ async function dates(page) {
   });
 }
 async function screenshot(page, name) {
-  await mkdir('audit/integral', { recursive:true });
+  await mkdir('audit/release', { recursive:true });
   if (name.startsWith('compensatorios')) await page.getByRole('dialog').evaluate((dialog) => { dialog.scrollTop = 0; });
-  await page.screenshot({ path:`audit/integral/${name}.png`, fullPage:!name.startsWith('compensatorios') });
+  await page.screenshot({ path:`audit/release/${name}.png`, fullPage:!name.startsWith('compensatorios') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
 }
 
@@ -61,10 +61,12 @@ for (const width of [390, 768, 1440]) test(`compensatorios independientes, histo
   await create('company_owes', 3); await create('worker_owes', 2);
   const company = modal.getByRole('article', { name:/La empresa me debe del/ });
   const worker = modal.getByRole('article', { name:/Yo debo a la empresa del/ });
+  await company.getByText('Ver detalles y registrar movimientos', { exact:true }).click();
   await company.getByRole('button', { name:'Registrar disfrute' }).click();
   await modal.getByLabel('Cantidad de días').fill('1');
   await modal.getByRole('button', { name:'Guardar movimiento' }).click();
   await expect(company).toContainText('2 días pendientes');
+  await worker.getByText('Ver detalles y registrar movimientos', { exact:true }).click();
   await worker.getByRole('button', { name:'Registrar compensación', exact:true }).click();
   await modal.getByLabel('Cantidad de días').fill('0.5');
   // Two submissions in the same task exercise the synchronous duplicate guard.
@@ -73,11 +75,19 @@ for (const width of [390, 768, 1440]) test(`compensatorios independientes, histo
   expect(await dates(page)).toEqual(before);
   const entries = await request.get(`${API}/${ROOT}/users/${uid}/compensatory_entries`, { headers });
   expect((await entries.json()).documents).toHaveLength(4);
+  const csvDownload = page.waitForEvent('download');
+  await modal.getByRole('button', { name:'Exportar registro completo en CSV' }).click();
+  expect((await csvDownload).suggestedFilename()).toMatch(/^rostermax-compensatorios-/);
+  await modal.getByLabel('Estado del registro').selectOption('settled');
+  await expect(modal.getByRole('article')).toHaveCount(0);
+  await modal.getByLabel('Estado del registro').selectOption('all');
   await screenshot(page, `compensatorios-${width}`);
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name:'Ver historial y registrar' })).toBeFocused();
   for (const tab of ['Roster','Equipo','Franco','Finanzas','Ajustes']) {
     await page.getByRole('navigation').getByRole('button', { name:tab, exact:true }).click();
+    const titles = { Roster: 'Tu calendario', Equipo: 'Mi equipo', Franco: 'Tu tiempo de franco', Finanzas: 'Tu dinero, con un plan', Ajustes: 'Cuenta y sincronización' };
+    await expect(page.getByRole('heading', { name:titles[tab], exact:true })).toBeVisible();
     await screenshot(page, `${tab.toLowerCase()}-${width}`);
   }
   const download = page.waitForEvent('download');

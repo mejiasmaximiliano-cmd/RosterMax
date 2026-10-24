@@ -2,6 +2,7 @@ const CACHE_PREFIX = 'rostermax-complete-';
 // Replaced for each build from its immutable asset names.
 const CACHE_NAME = CACHE_PREFIX + '__BUILD_ID__';
 const APP_SHELL = ['/', '/manifest.json', '/logo.svg', '/favicon.svg'];
+const LAZY_ASSETS = [/*__PRECACHE_ASSETS__*/];
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -12,7 +13,7 @@ self.addEventListener('install', (event) => {
       const html = await shell.clone().text();
       const assets = [...new Set([...html.matchAll(/(?:src|href)\s*=\s*["'](\/assets\/[^"']+)["']/g)].map((match) => match[1]))];
       if (!assets.some((path) => path.endsWith('.js'))) throw new Error('Missing entry');
-      await cache.addAll([...APP_SHELL.slice(1), ...assets].map((path) => new Request(path, { cache: 'reload' })));
+      await cache.addAll([...new Set([...APP_SHELL.slice(1), ...assets, ...LAZY_ASSETS])].map((path) => new Request(path, { cache: 'reload' })));
       // HTML is committed only after ALL entry assets are available.
       await cache.put('/', shell);
     } catch (error) {

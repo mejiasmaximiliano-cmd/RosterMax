@@ -116,6 +116,7 @@ test('licencia médica modifica disponibilidad, permite una cita y vuelve al ros
 test('presupuesto por mes y moneda, gasto persistido y meta de ahorro', async ({ page }, testInfo) => {
   await finishOnboarding(page);
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await page.getByLabel('Ingreso previsto (ARS)').fill('1000000');
   await page.getByLabel('Gastos fijos (ARS)').fill('300000');
   await page.getByLabel('Ahorro a reservar (ARS)').fill('100000');
@@ -154,6 +155,7 @@ test('presupuesto por mes y moneda, gasto persistido y meta de ahorro', async ({
   await captureMobile(page, testInfo, 'finanzas-mobile');
   await page.reload();
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await expect(page.getByLabel('Ingreso previsto (ARS)')).toHaveValue('1000000');
   await expect(page.getByRole('list', { name: 'Gastos registrados' }).getByText('Pasaje a casa', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: 'Moneda', exact: true }).selectOption('USD');

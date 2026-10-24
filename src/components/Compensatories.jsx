@@ -1,17 +1,29 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Scale } from 'lucide-react';
 import Modal from './Modal';
 import { useCompensatories } from '../lib/useCompensatories';
 import { COMPENSATORY_DIRECTIONS, COMPENSATORY_KINDS, compensatoryBalances, formatCompensatoryDays } from '../lib/compensatories';
+import { buildCompensatoryCsv, debtStatus, localInformativeDate } from '../lib/compensatoryCsv';
 
 const makeDraft = (today, extra = {}) => ({ id: crypto.randomUUID(), kind: 'open', direction: 'company_owes', informativeDate: today, quantity: '', note: '', ...extra });
 
-export default function Compensatories({ user, theme, today, onConfirmed }) {
+export default function Compensatories({ user, theme, today, onConfirmed, onPendingChange }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => makeDraft(today));
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState('all');
-  const { debts, entries, state, error, outbox, busy, submit, discardFailed } = useCompensatories(user, { open, onConfirmed });
+  const [statusFilter, setStatusFilter] = useState('all');
+  const { debts, entries, state, historyState, error, outbox, busy, submit, discardFailed } = useCompensatories(user, { open, onConfirmed });
+  const pending = outbox.length > 0 || debts.some((debt) => debt.pending);
+  useEffect(() => { onPendingChange?.(pending); }, [pending, onPendingChange]);
+  const completeHistory = debts.every((debt) => entries.filter((entry) => entry.debtId === debt.id).length === debt.revision);
+  const canExport = historyState !== 'loading' && historyState !== 'error' && completeHistory;
+  const exportCsv = () => {
+    if (!canExport) return;
+    const url = URL.createObjectURL(new Blob([buildCompensatoryCsv({ debts, entries, confirmed: state === 'ready' && historyState === 'ready' })], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = `rostermax-compensatorios-${today}.csv`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const balances = useMemo(() => compensatoryBalances(debts), [debts]);
   const light = theme === 'light';
   const card = `rounded-2xl border p-4 ${light ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-700'}`;
@@ -36,6 +48,8 @@ export default function Compensatories({ user, theme, today, onConfirmed }) {
       <fieldset disabled={busy} className="space-y-5 min-w-0">
         <p className="text-sm leading-relaxed opacity-80">Anota lo que la empresa te debe y lo que tú debes por separado. La fecha es informativa. Estos movimientos no cambian tu roster, finanzas, avisos ni calendarios exportados.</p>
         {balanceCards}
+        <button type="button" disabled={!canExport} onClick={exportCsv} className={button}>Exportar registro completo en CSV</button>
+        <p className="text-xs opacity-75">Incluye ambos saldos y todas las revisiones, sin aplicar los filtros. Solo las filas DEUDA aportan al saldo; el historial no se suma. {canExport ? 'Registro disponible para exportar.' : 'Esperando el historial completo para evitar una exportación incompleta.'}</p>
         {state === 'loading' && <p role="status">Esperando datos del servidor o una copia local disponible…</p>}
         {state === 'cached' && <p role="status" className="text-sm text-amber-500">Copia local. La confirmación del servidor puede estar pendiente.</p>}
         {error && <p role="alert" className="rounded-xl bg-amber-500/10 p-3 text-sm text-amber-500">{error}</p>}
@@ -51,17 +65,21 @@ export default function Compensatories({ user, theme, today, onConfirmed }) {
           <div className="flex gap-2"><button type="submit" disabled={busy} className="min-h-11 flex-1 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white disabled:opacity-50">{busy ? 'Guardando…' : 'Guardar movimiento'}</button><button type="button" className={button} onClick={() => setShowForm(false)}>Cancelar</button></div>
         </form>}
         <label className="block text-sm font-semibold">Ver saldos<select value={filter} onChange={(event) => setFilter(event.target.value)} className={input}><option value="all">Ambos saldos</option>{Object.entries(COMPENSATORY_DIRECTIONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="block text-sm font-semibold">Estado del registro<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className={input}><option value="all">Todos, incluido el historial</option><option value="pending">Pendientes</option><option value="settled">Saldados</option><option value="voided">Anulados</option></select></label>
         {known && debts.length === 0 && <p className="py-5 text-center text-sm opacity-75">Aún no registraste compensatorios. Cada saldo comenzará con los días que tú cargues.</p>}
-        {debts.filter((debt) => filter === 'all' || debt.direction === filter).map((debt) => <article key={debt.id} aria-label={`${COMPENSATORY_DIRECTIONS[debt.direction]} del ${debt.informativeDate}`} className={`${card} space-y-3`}>
+        {debts.filter((debt) => (filter === 'all' || debt.direction === filter) && (statusFilter === 'all' || debtStatus(debt) === statusFilter)).map((debt) => <article key={debt.id} aria-label={`${COMPENSATORY_DIRECTIONS[debt.direction]} del ${debt.informativeDate}`} className={`${card} space-y-3`}>
           <h3 className="font-bold">{COMPENSATORY_DIRECTIONS[debt.direction]}</h3>
-          <p className="text-sm">{debt.informativeDate} · {debt.voided ? 'Anulada' : `${formatCompensatoryDays(debt.totalUnits - debt.settledUnits)} días pendientes`}</p>
+          <p className="text-sm">{localInformativeDate(debt.informativeDate)} · {debt.voided ? 'Anulada' : `${formatCompensatoryDays(debt.totalUnits - debt.settledUnits)} días pendientes`}</p>
+          <p className="text-xs opacity-75">{debt.pending ? 'Guardado en el dispositivo · pendiente de sincronizar' : state === 'ready' ? 'Sincronizado' : 'Guardado en el dispositivo · sin comprobación reciente'}</p>
+          <details><summary className="min-h-11 cursor-pointer py-2 text-sm font-semibold">Ver detalles y registrar movimientos</summary><div className="space-y-3 pt-2">
           <p className="text-sm opacity-75">Registrados {formatCompensatoryDays(debt.totalUnits)} · compensados {formatCompensatoryDays(debt.settledUnits)}</p>
           {debt.note && <p className="break-words text-sm">{debt.note}</p>}
           <p className={`text-xs ${debt.pending ? 'text-amber-500' : 'text-emerald-500'}`}>{debt.pending ? 'Guardado local · pendiente de confirmación' : state === 'ready' ? 'Confirmado por servidor' : 'Copia local del último registro'}</p>
           {!debt.voided && <div className="flex flex-wrap gap-2">{debt.totalUnits > debt.settledUnits && <button type="button" className={button} onClick={() => start({ kind: 'settle', debtId: debt.id })}>{debt.direction === 'company_owes' ? 'Registrar disfrute' : 'Registrar compensación'}</button>}<button type="button" className={button} onClick={() => start({ kind: 'edit', debtId: debt.id, quantity: debt.totalUnits / 2, informativeDate: debt.informativeDate, note: debt.note })}>Corregir deuda</button><button type="button" disabled={debt.settledUnits > 0} className={button} onClick={() => start({ kind: 'void', debtId: debt.id })}>Anular deuda</button></div>}
           {debt.settledUnits > 0 && <p className="text-xs opacity-70">Para anular esta deuda, anula primero sus compensaciones activas.</p>}
           {Object.entries(debt.settlements || {}).map(([referenceId, units]) => <div key={referenceId} className="rounded-xl bg-blue-500/5 p-3"><p className="text-sm">Compensación activa: {formatCompensatoryDays(units)} días</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" className={button} onClick={() => start({ kind: 'edit_settlement', debtId: debt.id, referenceId, quantity: units / 2 })}>Corregir compensación</button><button type="button" className={button} onClick={() => start({ kind: 'void_settlement', debtId: debt.id, referenceId })}>Anular compensación</button></div></div>)}
-          <details><summary className="min-h-10 cursor-pointer py-2 text-sm font-semibold">Movimientos y correcciones</summary><ol className="space-y-2">{entries.filter((entry) => entry.debtId === debt.id).map((entry) => <li key={entry.id} className="border-l-2 border-indigo-500/40 pl-3 text-sm"><p className="font-semibold">{COMPENSATORY_KINDS[entry.kind]} · revisión {entry.revision}</p><p>{entry.informativeDate} · {formatCompensatoryDays(entry.units)} días{entry.previousUnits > 0 ? ` · antes ${formatCompensatoryDays(entry.previousUnits)}` : ''}</p>{entry.note && <p className="break-words opacity-75">{entry.note}</p>}<p className="text-xs opacity-70">{entry.pending ? 'Pendiente de confirmación' : 'Registro conservado'}</p></li>)}</ol></details>
+          <details><summary className="min-h-10 cursor-pointer py-2 text-sm font-semibold">Movimientos y correcciones</summary><ol className="space-y-2">{entries.filter((entry) => entry.debtId === debt.id).map((entry) => <li key={entry.id} className="border-l-2 border-indigo-500/40 pl-3 text-sm"><p className="font-semibold">{COMPENSATORY_KINDS[entry.kind]} · revisión {entry.revision}</p><p>{localInformativeDate(entry.informativeDate)} · {formatCompensatoryDays(entry.units)} días{entry.previousUnits > 0 ? ` · antes ${formatCompensatoryDays(entry.previousUnits)}` : ''}</p>{entry.note && <p className="break-words opacity-75">{entry.note}</p>}<p className="text-xs opacity-70">{entry.pending ? 'Pendiente de sincronizar' : historyState === 'ready' ? 'Sincronizado · registro conservado' : 'Guardado en el dispositivo'}</p></li>)}</ol></details>
+          </div></details>
         </article>)}
       </fieldset>
     </Modal>}

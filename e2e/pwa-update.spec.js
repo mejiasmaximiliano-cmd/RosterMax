@@ -8,9 +8,9 @@ test('PWA conserva versión completa ante actualización fallida y dos pestañas
   const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
   const server = createServer((req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    if (req.url === '/sw.js') { res.setHeader('Content-Type', 'application/javascript'); res.end(sw.replace('__BUILD_ID__', version)); }
+    if (req.url === '/sw.js') { res.setHeader('Content-Type', 'application/javascript'); res.end(sw.replace('__BUILD_ID__', version).replace('/*__PRECACHE_ASSETS__*/', JSON.stringify(`/assets/lazy-${version}.js`))); }
     else if (req.url?.startsWith('/assets/')) {
-      if (fail && req.url === '/assets/b.js') { res.writeHead(503); res.end('simulated interrupted deployment'); return; }
+      if (fail && req.url === '/assets/lazy-b.js') { res.writeHead(503); res.end('simulated interrupted lazy module deployment'); return; }
       res.setHeader('Content-Type', 'application/javascript'); res.end(`document.body.dataset.version=${JSON.stringify(req.url.slice(8,9))}`);
     } else if (['/manifest.json','/logo.svg','/favicon.svg'].includes(req.url)) { res.end('{}'); }
     else { res.setHeader('Content-Type', 'text/html'); res.end(`<html><body><h1>Local PWA fixture</h1><script src="/assets/${version}.js"></script></body></html>`); }

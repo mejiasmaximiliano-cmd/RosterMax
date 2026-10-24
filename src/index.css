@@ -26,6 +26,14 @@ body {
   min-height: 100vh;
 }
 
+/* Currency may wrap before the amount, never through its digits. Full-width
+   metric cells at narrow widths leave room for valid, large saved values. */
+.money-line { overflow-wrap: normal; word-break: normal; font-variant-numeric: tabular-nums; font-size: clamp(0.85rem, 3.7vw, 1.5rem); }
+input, select, textarea { max-width: 100%; scroll-margin-block: 7rem; }
+dialog { scroll-padding-bottom: 2rem; }
+summary { touch-action: manipulation; }
+@media (max-width: 479px) { dl:has(.money-line) { grid-template-columns: minmax(0, 1fr); } }
+
 button,
 input,
 select {

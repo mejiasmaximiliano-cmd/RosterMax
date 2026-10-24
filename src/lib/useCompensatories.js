@@ -12,6 +12,7 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
   const [debts, setDebts] = useState([]);
   const [entries, setEntries] = useState([]);
   const [state, setState] = useState('loading');
+  const [historyState, setHistoryState] = useState('loading');
   const [error, setError] = useState('');
   const [outbox, setOutbox] = useState(() => readOutbox(user.uid));
   const [busy, setBusy] = useState(false);
@@ -40,6 +41,7 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
     if (!open && !outbox.length) return undefined;
     return onSnapshot(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'compensatory_entries'), { includeMetadataChanges: true }, (snapshot) => {
       setEntries(snapshot.docs.map((item) => ({ id: item.id, ...item.data(), pending: item.metadata.hasPendingWrites })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0) || b.revision - a.revision));
+      setHistoryState(snapshot.metadata.fromCache ? 'cached' : 'ready');
       if (!snapshot.metadata.fromCache) {
         snapshot.docs.filter((item) => !item.metadata.hasPendingWrites).forEach((item) => acknowledge(item.id));
         const missing = outboxRef.current.filter((item) => item.status === 'queued' && !snapshot.docs.some((d) => d.id === item.id) && !headsRef.current.some((head) => head.pending && head.lastEventId === item.id));
@@ -48,7 +50,7 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
           setError('Hay un intento local sin confirmación ni escritura en cola. Revísalo para reintentar con el mismo identificador.');
         }
       }
-    }, () => setError('No pudimos actualizar el historial. Tus intentos pendientes siguen guardados en este dispositivo.'));
+    }, () => { setHistoryState('error'); setError('No pudimos actualizar el historial. Tus intentos pendientes siguen guardados en este dispositivo.'); });
   }, [user.uid, open, outbox.length, acknowledge, persist]);
 
   const submit = useCallback(async (input) => {
@@ -82,5 +84,5 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
     finally { busyRef.current = false; setBusy(false); }
   }, [user.uid, persist, acknowledge]);
   const discardFailed = (id) => persist(outboxRef.current.filter((item) => item.id !== id || item.status !== 'error'));
-  return { debts, entries, state, error, outbox, busy, submit, discardFailed };
+  return { debts, entries, state, historyState, error, outbox, busy, submit, discardFailed };
 }

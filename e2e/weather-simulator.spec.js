@@ -119,6 +119,7 @@ test('simulador muestra día 10 de 14 trabajando y día 5 de 7 de franco junto a
   await simulator.getByLabel('Fecha para comparar rosters').fill(TODAY);
   const own = simulator.getByRole('article', { name: 'Roster de Tú' });
   await expect(own).toContainText('Día 10 de 14 de trabajo');
+  await page.getByText('Añadir compañero', { exact:true }).click();
   await page.getByRole('button', { name: 'Carga Manual', exact: true }).click();
   const manualForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Guardar Manualmente', exact: true }) });
   await manualForm.getByPlaceholder('Nombre', { exact: true }).fill('Colega 7x7');

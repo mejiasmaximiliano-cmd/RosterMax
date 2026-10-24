@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, CalendarPlus, Check, ChevronLeft, ChevronRight, Download, Settings2 } from 'lucide-react';
 import { buildMonthCalendar, createRosterIcs, getMonthBounds, shiftMonth } from '../lib/calendar.js';
 import { parseDateOnly } from '../lib/roster.js';
@@ -9,9 +9,10 @@ function formatDate(date, options) {
   return new Intl.DateTimeFormat('es-AR', { ...options, timeZone: 'UTC' }).format(new Date(parseDateOnly(date)));
 }
 
-export default function RosterCalendar({ config, today, theme, tasks = [], onPlanDate, onManageExceptions }) {
+export default function RosterCalendar({ config, today, theme, tasks = [], onPlanDate, onManageExceptions, onSelectionChange }) {
   const [month, setMonth] = useState(today.slice(0, 7));
   const [selectedDate, setSelectedDate] = useState(today);
+  useEffect(() => { onSelectionChange?.(selectedDate); }, [selectedDate, onSelectionChange]);
   const [exportMessage, setExportMessage] = useState('');
   const calendar = useMemo(() => buildMonthCalendar(month, config, tasks), [month, config, tasks]);
   const selected = calendar.days.find((day) => day.date === selectedDate) || calendar.days[0];
@@ -25,11 +26,13 @@ export default function RosterCalendar({ config, today, theme, tasks = [], onPla
     const nextMonth = shiftMonth(month, direction);
     setMonth(nextMonth);
     setSelectedDate(`${nextMonth}-01`);
+    onSelectionChange?.(`${nextMonth}-01`);
     setExportMessage('');
   };
   const returnToToday = () => {
     setMonth(today.slice(0, 7));
     setSelectedDate(today);
+    onSelectionChange?.(today);
     setExportMessage('');
   };
   const exportCalendar = (period) => {
@@ -68,7 +71,7 @@ export default function RosterCalendar({ config, today, theme, tasks = [], onPla
         <div className="grid grid-cols-7 gap-1.5">
           {calendar.cells.map((day, index) => day ? (
             <button
-              key={day.date} type="button" onClick={() => setSelectedDate(day.date)}
+              key={day.date} type="button" onClick={() => { setSelectedDate(day.date); onSelectionChange?.(day.date); }}
               aria-label={`${formatDate(day.date, { weekday: 'long', day: 'numeric', month: 'long' })}: ${day.label}${day.date === today ? ', hoy' : ''}${day.tasks.length ? `, ${day.tasks.length} planes` : ''}`}
               aria-pressed={selected?.date === day.date} aria-current={day.date === today ? 'date' : undefined}
               className={`relative min-h-12 sm:min-h-14 rounded-xl border flex flex-col items-center justify-center transition-shadow ${colors[day.kind] || ''} ${selected?.date === day.date ? 'ring-2 ring-blue-500 ring-offset-1 ring-offset-transparent' : ''} ${day.date === today ? 'font-black underline underline-offset-4 decoration-2' : 'font-semibold'}`}

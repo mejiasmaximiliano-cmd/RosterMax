@@ -1,5 +1,5 @@
 name: Verify isolated RosterMax
-on: [pull_request, workflow_dispatch]
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
@@ -30,3 +30,4 @@ jobs:
             playwright-report/
             test-results/
             audit/integral/
+            audit/release/

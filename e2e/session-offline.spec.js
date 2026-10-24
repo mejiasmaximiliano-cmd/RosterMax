@@ -86,6 +86,7 @@ test('cambiar UID limpia perfil, planes y finanzas sin borrar la cuenta anterior
   const uidA = await userId(page);
   await addPlan(page, 'Plan exclusivo de cuenta A');
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await page.getByLabel('Ingreso previsto (ARS)').fill('777000');
   await page.getByLabel('Gastos fijos (ARS)').fill('123000');
   await page.getByRole('button', { name: 'Guardar este presupuesto' }).click();
@@ -105,6 +106,7 @@ test('cambiar UID limpia perfil, planes y finanzas sin borrar la cuenta anterior
   await expect(page.getByRole('button', { name: 'Editar: Plan exclusivo de cuenta A', exact: true })).toHaveCount(0);
   await expect(page.getByText('No hay planes en esta vista.', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await expect(page.getByLabel('Ingreso previsto (ARS)')).toHaveValue('0');
   await expect(page.getByLabel('Gastos fijos (ARS)')).toHaveValue('0');
   await addPlan(page, 'Plan exclusivo de cuenta B');
@@ -117,6 +119,7 @@ test('guarda planes y gastos sin red y los sincroniza al reconectar, conservánd
   const uid = await userId(page);
   // Load both private collections while online before losing connectivity.
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await expect(page.getByLabel('Monto (ARS)', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: 'Franco', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Nuevo plan', exact: true })).toBeVisible();
@@ -126,6 +129,7 @@ test('guarda planes y gastos sin red y los sincroniza al reconectar, conservánd
   await addPlan(page, 'Llamar a casa al recuperar señal');
   await expect(page.getByText('Cambios pendientes de sincronización', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await page.getByLabel('Monto (ARS)', { exact: true }).fill('4500');
   await page.getByLabel('Detalle (opcional)').fill('Vianda registrada sin red');
   await page.getByRole('button', { name: 'Registrar gasto', exact: true }).click();
@@ -150,6 +154,7 @@ test('guarda planes y gastos sin red y los sincroniza al reconectar, conservánd
   await page.getByRole('navigation').getByRole('button', { name: 'Franco', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Llamar a casa al recuperar señal', exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
+  await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await expect(page.getByRole('list', { name: 'Gastos registrados' }).getByText('Vianda registrada sin red', { exact: true })).toBeVisible();
 });
 

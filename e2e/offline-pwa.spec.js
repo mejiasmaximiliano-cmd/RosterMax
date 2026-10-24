@@ -44,6 +44,12 @@ test('compensatorios: recarga PWA realmente offline, conserva pendientes y sincr
     await expect(page.getByRole('dialog').getByText('Aún no registraste compensatorios.',{exact:false})).toBeVisible();
     await context.setOffline(true);
     await expect(page.getByText('Modo Sin Conexión',{exact:true})).toBeVisible();
+    await page.keyboard.press('Escape');
+    for (const name of ['Finanzas','Franco','Ajustes','Roster']) {
+      await page.getByRole('navigation').getByRole('button',{name, exact:true}).click();
+      await expect(page.getByText('Cargando sección…',{exact:true})).toHaveCount(0);
+    }
+    await page.getByRole('button',{name:'Ver historial y registrar'}).click();
     await page.getByRole('dialog').getByRole('button',{name:'Registrar días pendientes'}).click();
     await page.getByLabel('Cantidad de días').fill('3');
     await page.getByRole('button',{name:'Guardar movimiento'}).click();

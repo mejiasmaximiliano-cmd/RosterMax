@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calendar, CheckSquare, TrendingUp, User, 
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
@@ -40,25 +40,26 @@ import OnboardingModal from './components/OnboardingModal';
 import SessionGate from './components/SessionGate';
 import { useToday } from './lib/useToday';
 import RosterCalendar from './components/RosterCalendar';
-import FinancePanel from './components/FinancePanel';
+const FinancePanel = lazy(() => import('./components/FinancePanel'));
 import DateSimulator from './components/DateSimulator';
-import CeoAudiencePanel from './components/CeoAudiencePanel';
-import CeoOperationsPanel from './components/CeoOperationsPanel';
+const CeoAudiencePanel = lazy(() => import('./components/CeoAudiencePanel'));
+const CeoOperationsPanel = lazy(() => import('./components/CeoOperationsPanel'));
 import WeatherPanel from './components/WeatherPanel';
 import { fetchAccountCensus } from './lib/accountCensus';
-import PlannerPanel from './components/PlannerPanel';
+const PlannerPanel = lazy(() => import('./components/PlannerPanel'));
 import Compensatories from './components/Compensatories';
 import { canAdminister } from './lib/adminAccess';
 import { changeRosterConfiguration, encodeRosterHistory, rosterForDate } from './lib/rosterHistory';
 import { useFeatureMeasurement } from './lib/useFeatureMeasurement';
 import Modal from './components/Modal';
-import PrivacyPanel from './components/PrivacyPanel';
+const PrivacyPanel = lazy(() => import('./components/PrivacyPanel'));
 import { useCeoData } from './lib/useCeoData';
 import { getCalendarDayLabel } from './lib/calendar';
+import PwaUpdateNotice from './components/PwaUpdateNotice';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
-const APP_VERSION = 'beta-0.6';
+const APP_VERSION = 'beta-0.7';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -186,6 +187,8 @@ function SessionApp({ user, hasAdminClaim }) {
   const sharedReady = confirmed.roster && confirmed.profile && confirmed.exceptions;
   const [dataError, setDataError] = useState('');
   const [pendingWrites, setPendingWrites] = useState(0);
+  const [compensatoriesPending, setCompensatoriesPending] = useState(false);
+  const [calendarDate, setCalendarDate] = useState('');
   const [privateSync, setPrivateSync] = useState({});
   const [userProfile, setUserProfile] = useState(DEFAULT_PROFILE);
   const [tasks, setTasks] = useState([]);
@@ -578,11 +581,11 @@ function SessionApp({ user, hasAdminClaim }) {
     }
 
     const unsubscribers = syncedFriends.map((friend) => onSnapshot(
-      getSyncCodeRef(friend.syncCode),
+      getSyncCodeRef(friend.syncCode), { includeMetadataChanges: true },
       (snapshot) => {
         setFriendLiveData((current) => ({
           ...current,
-          [friend.syncCode]: snapshot.exists() ? snapshot.data() : null,
+          [friend.syncCode]: snapshot.exists() ? { ...snapshot.data(), locallyCached: snapshot.metadata.fromCache } : null,
         }));
       },
       (error) => {
@@ -631,6 +634,8 @@ function SessionApp({ user, hasAdminClaim }) {
             startDate: liveData.startDate,
             ...(liveData.history ? { history: liveData.history } : {}),
             exceptions: Array.isArray(liveData.exceptions) ? liveData.exceptions : [],
+            sharedUpdatedAt: liveData.updatedAt || null,
+            sharedCached: liveData.locallyCached === true,
             syncAvailable: true,
           };
         }
@@ -1327,7 +1332,8 @@ function SessionApp({ user, hasAdminClaim }) {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6">
+      <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6"><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
+        <PwaUpdateNotice theme={theme} showControls={activeTab === 'settings'} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}/>
         {dataError && <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p>{dataError}</p><button onClick={() => window.location.reload()} className="mt-2 underline font-bold">Volver a cargar</button></div>}
         {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprueba la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
         {(pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)) ? <p role="status" className={`text-sm ${textMuted}`}>Guardado local · <span>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</span> No confirmado por el servidor.</p> : <p role="status" className={`text-xs ${textMuted}`}>{Object.values(privateSync).some((s) => s.cached) ? 'Datos locales · esperando comprobar el servidor' : 'Datos privados confirmados por el servidor'}</p>}
@@ -1343,26 +1349,18 @@ function SessionApp({ user, hasAdminClaim }) {
         {/* TAB 1: ROSTER */}
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <Compensatories user={user} theme={theme} today={today} onConfirmed={measureConfirmed}/>
             {rosterSaved && <RosterCalendar config={effectiveRoster} today={today} theme={theme} tasks={tasks}
+              onSelectionChange={setCalendarDate}
               onPlanDate={(date) => { setPlannedDate(date); setActiveTab('planner'); window.scrollTo({ top: 0 }); }}
               onManageExceptions={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}/>
             }
-            <div className={`relative overflow-hidden rounded-3xl border p-6 ${cardClasses[theme]}`}>
-              <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-emerald-500/20 blur-3xl"></div>
-              <div className="flex items-center justify-between mb-4 relative z-10">
-                <h2 className={`text-xs font-bold uppercase tracking-widest ${textMuted}`}>Estado Hoy</h2>
-                <span className="text-xs font-bold rounded-full px-3 py-1 bg-blue-500/10 text-blue-500">{currentStatus.error ? 'Configura tu roster' : getCalendarDayLabel(currentStatus)}</span>
-              </div>
-              <div className="relative z-10">
-                {currentStatus.error ? <button type="button" onClick={() => { setActiveTab('settings'); }} className="rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white">Configurar mi diagrama</button> : <div className="flex items-baseline space-x-2"><span className="text-6xl font-black">{currentStatus.actualDay}</span><span className={`text-xl font-medium ${textMuted}`}>/ {currentStatus.totalPhaseDays}</span></div>}
-                <p className={`mt-1 text-sm ${textMuted}`}>{currentStatus.error ? 'Todavía no hay un diagrama guardado.' : currentStatus.isOverride ? 'Día del cambio temporal.' : `Días ${currentStatus.isWorking ? 'trabajados' : 'de franco'} del ciclo.`}</p>
-                {currentStatus?.isOverride && <p className="mt-2 inline-flex items-center rounded-full bg-indigo-500/15 px-3 py-1 text-[10px] font-bold text-indigo-400"><CalendarRange size={12} className="mr-1.5"/>{currentStatus.exceptionLabel || EXCEPTION_LABELS[currentStatus.exceptionType]}</p>}
-              </div>
-              <div className={`mt-6 h-2.5 w-full rounded-full overflow-hidden ${theme === 'light' ? 'bg-slate-200' : 'bg-slate-800/50'}`}>
-                <div className={`h-full rounded-full transition-all duration-1000 ${currentStatus?.isWorking ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${((currentStatus?.actualDay || 0) / (currentStatus?.totalPhaseDays || 1)) * 100}%` }}></div>
-              </div>
-            </div>
+            {calendarDate && calendarDate !== today && <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`} aria-label="Estado de hoy">
+              <h2 className="text-sm font-bold">Hoy · {formatShortDate(today)}</h2>
+              <p className="mt-1 text-sm">{currentStatus.error ? 'Configura tu roster' : `${getCalendarDayLabel(currentStatus)} · día ${currentStatus.actualDay} de ${currentStatus.totalPhaseDays}`}</p>
+              <p className={`mt-1 text-xs ${textMuted}`}>Este resumen siempre corresponde a hoy; el calendario muestra la fecha que selecciones.</p>
+            </div>}
+
+            <Compensatories user={user} theme={theme} today={today} onConfirmed={measureConfirmed} onPendingChange={setCompensatoriesPending}/>
 
             {!nextTransition?.error && (
               <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
@@ -1407,10 +1405,10 @@ function SessionApp({ user, hasAdminClaim }) {
 
               {scheduleExceptions.length === 0 ? <p className={`mt-4 text-xs text-center py-2 ${textMuted}`}>Tu roster sigue el diagrama habitual, sin cambios cargados.</p> : (
                 <div className="mt-4 space-y-2 max-h-64 overflow-y-auto pr-1">
-                  {scheduleExceptions.map((exception) => (
+                  {scheduleExceptions.filter((item) => item.endDate >= today).map((exception) => (
                     <div key={exception.id} className={`rounded-xl border p-3 flex items-center gap-3 ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
                       <div className="h-9 w-9 flex-shrink-0 rounded-lg bg-indigo-500/15 text-indigo-500 flex items-center justify-center"><ScheduleExceptionIcon type={exception.type}/></div>
-                      <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{exception.label || EXCEPTION_LABELS[exception.type]}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(exception.startDate)} — {formatShortDate(exception.endDate)}{exception.type === 'special_roster' ? ` · ${exception.workDays}x${exception.restDays}` : ''}</p></div>
+                      <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{exception.startDate <= today ? 'Vigente · ' : 'Próximo · '}{exception.label || EXCEPTION_LABELS[exception.type]}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(exception.startDate)} — {formatShortDate(exception.endDate)}{exception.type === 'special_roster' ? ` · ${exception.workDays}x${exception.restDays}` : ''}</p></div>
                       <button type="button" onClick={() => { setEditingException(exception); setExceptionType(exception.type); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="min-h-11 min-w-11 grid place-items-center text-blue-500" aria-label={`Editar ${EXCEPTION_LABELS[exception.type]}`}><Pencil size={16}/></button>
                       <button type="button" onClick={() => { if (window.confirm('¿Eliminar este cambio temporal y volver al diagrama habitual en esas fechas?')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', exception.id)), 'Cambio temporal eliminado.'); }} className="min-h-11 min-w-11 grid place-items-center text-slate-400 hover:text-red-400" aria-label={`Eliminar ${EXCEPTION_LABELS[exception.type]}`}><Trash2 size={16}/></button>
                     </div>
@@ -1418,6 +1416,15 @@ function SessionApp({ user, hasAdminClaim }) {
                 </div>
               )}
             </div>
+
+            {scheduleExceptions.some((item) => item.endDate < today) && <details className={`rounded-2xl border p-4 ${cardClasses[theme]}`}><summary className="min-h-11 cursor-pointer py-2 font-bold">Historial de cambios temporales anteriores</summary><div className="space-y-2 pt-3">                  {scheduleExceptions.filter((item) => item.endDate < today).map((exception) => (
+                    <div key={exception.id} className={`rounded-xl border p-3 flex items-center gap-3 ${theme === 'light' ? 'bg-slate-50 border-slate-200' : 'bg-slate-800/40 border-slate-700'}`}>
+                      <div className="h-9 w-9 flex-shrink-0 rounded-lg bg-indigo-500/15 text-indigo-500 flex items-center justify-center"><ScheduleExceptionIcon type={exception.type}/></div>
+                      <div className="min-w-0 flex-1"><p className="text-xs font-bold truncate">{exception.label || EXCEPTION_LABELS[exception.type]}</p><p className={`text-[10px] ${textMuted}`}>{formatShortDate(exception.startDate)} — {formatShortDate(exception.endDate)}{exception.type === 'special_roster' ? ` · ${exception.workDays}x${exception.restDays}` : ''}</p></div>
+                      <button type="button" onClick={() => { setEditingException(exception); setExceptionType(exception.type); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="min-h-11 min-w-11 grid place-items-center text-blue-500" aria-label={`Editar ${EXCEPTION_LABELS[exception.type]}`}><Pencil size={16}/></button>
+                      <button type="button" onClick={() => { if (window.confirm('¿Eliminar este cambio temporal y volver al diagrama habitual en esas fechas?')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', exception.id)), 'Cambio temporal eliminado.'); }} className="min-h-11 min-w-11 grid place-items-center text-slate-400 hover:text-red-400" aria-label={`Eliminar ${EXCEPTION_LABELS[exception.type]}`}><Trash2 size={16}/></button>
+                    </div>
+                  ))}</div></details>}
 
             {/* MOTOR DE ANUNCIOS SMART */}
             {shouldShowAd && (
@@ -1521,7 +1528,23 @@ function SessionApp({ user, hasAdminClaim }) {
                <span className="font-bold text-sm">{syncState === 'loading' ? 'Preparando código seguro…' : 'Enviar mi código a un contacto'}</span>
             </button>
 
-            <div className={`rounded-2xl border overflow-hidden ${cardClasses[theme]}`}>
+            {(
+              <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`}>
+                <div className="flex items-center justify-between gap-3 mb-3"><div><h3 className="font-bold">Mi equipo</h3><p className={`text-[10px] ${textMuted}`}>{displayFriends.length} {displayFriends.length === 1 ? 'compañero' : 'compañeros'} en tu lista</p></div><Filter size={17} className="text-blue-500"/></div>
+                {displayFriends.length > 6 && <div className="relative mb-3"><Search size={15} className={`absolute left-3 top-2.5 ${textMuted}`}/><input value={crewSearch} onChange={(event) => setCrewSearch(event.target.value)} placeholder="Buscar compañero…" className={`w-full rounded-xl pl-9 pr-3 py-2 text-sm outline-none border ${inputBg}`}/></div>}
+                <p className="mb-3 text-xs opacity-75">Carga manual: solo tú la mantienes. Vinculación: recibe el roster compartido por tu compañero.</p>{displayFriends.length === 0 && <p className="py-3 text-sm">Tu equipo está vacío. Abre “Añadir compañero” para empezar.</p>}<div className="space-y-2 max-h-[26rem] overflow-y-auto pr-1">
+                {visibleFriends.map(friend => (
+                  <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
+                    <div className="min-w-0"><p className="font-bold text-sm flex items-center break-words">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p><p className="mt-1 text-xs opacity-75">{friend.isSynced ? 'Vinculado' : 'Carga manual'}{friend.sharedUpdatedAt?.seconds ? ` · Última publicación: ${new Date(friend.sharedUpdatedAt.seconds * 1000).toLocaleString('es-AR')}${friend.sharedCached ? ' (copia local; sin comprobación reciente)' : ''}` : ' · sin fecha de actualización confirmada'}</p></div>
+                    <button onClick={() => { if (window.confirm('¿Quitar este compañero de tu lista? Esto no elimina tu código ni te quita de su equipo.')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id)), 'Compañero quitado de tu lista.'); }} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
+                  </div>
+                ))}
+                {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
+                </div>
+                {filteredFriends.length > 6 && <button type="button" onClick={() => setShowAllFriends((value) => !value)} className="w-full mt-3 rounded-xl border border-blue-500/20 py-2.5 text-xs font-bold text-blue-500 flex items-center justify-center">{showAllFriends ? <ChevronUp size={14} className="mr-1"/> : <ChevronDown size={14} className="mr-1"/>}{showAllFriends ? 'Mostrar solo 6' : `Mostrar los ${filteredFriends.length}`}</button>}
+              </div>
+            )}
+            <details className={`rounded-2xl border overflow-hidden ${cardClasses[theme]}`}><summary className="min-h-11 cursor-pointer p-4 font-bold">Añadir compañero</summary>
               <div className="flex border-b border-inherit">
                  <button onClick={() => setAddMethod('manual')} className={`flex-1 py-3 text-sm font-bold transition-colors ${addMethod === 'manual' ? 'bg-blue-500/10 text-blue-500 border-b-2 border-b-blue-500' : textMuted}`}>Carga Manual</button>
                  <button onClick={() => setAddMethod('sync')} className={`flex-1 py-3 text-sm font-bold transition-colors ${addMethod === 'sync' ? 'bg-blue-500/10 text-blue-500 border-b-2 border-b-blue-500' : textMuted}`}>Vincular (Sync)</button>
@@ -1530,7 +1553,7 @@ function SessionApp({ user, hasAdminClaim }) {
                 {addMethod === 'manual' ? (
                   <form onSubmit={(e) => addGenericDoc(e, 'friends', { name: e.target.elements.name.value, workDays: parseInt(e.target.elements.w.value), restDays: parseInt(e.target.elements.r.value), startDate: e.target.elements.start.value, isSynced: false })} className="space-y-3 animate-in fade-in">
                     <input name="name" type="text" placeholder="Nombre" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
-                    <div className="flex space-x-2"><input name="w" type="number" placeholder="Trabajo" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /><input name="r" type="number" placeholder="Descanso" className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></div>
+                    <div className="grid grid-cols-2 gap-2"><label className="min-w-0 text-xs font-semibold">Trabajo<input name="w" type="number" min="1" max="365" placeholder="Trabajo" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label><label className="min-w-0 text-xs font-semibold">Descanso<input name="r" type="number" min="1" max="365" placeholder="Descanso" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label></div>
                     <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida del compañero</label><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
                     <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors mt-2">Guardar Manualmente</button>
                   </form>
@@ -1541,24 +1564,9 @@ function SessionApp({ user, hasAdminClaim }) {
                   </form>
                 )}
               </div>
-            </div>
+            </details>
             
-            {displayFriends.length > 0 && (
-              <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`}>
-                <div className="flex items-center justify-between gap-3 mb-3"><div><h3 className="font-bold">Mi equipo</h3><p className={`text-[10px] ${textMuted}`}>{displayFriends.length} {displayFriends.length === 1 ? 'compañero' : 'compañeros'} vinculados</p></div><Filter size={17} className="text-blue-500"/></div>
-                {displayFriends.length > 6 && <div className="relative mb-3"><Search size={15} className={`absolute left-3 top-2.5 ${textMuted}`}/><input value={crewSearch} onChange={(event) => setCrewSearch(event.target.value)} placeholder="Buscar compañero…" className={`w-full rounded-xl pl-9 pr-3 py-2 text-sm outline-none border ${inputBg}`}/></div>}
-                <div className="space-y-2 max-h-[26rem] overflow-y-auto pr-1">
-                {visibleFriends.map(friend => (
-                  <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
-                    <div><p className="font-bold text-sm flex items-center">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p></div>
-                    <button onClick={() => { if (window.confirm('¿Quitar este compañero de tu lista? Esto no elimina tu código ni te quita de su equipo.')) savePrivate(deleteDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'friends', friend.id)), 'Compañero quitado de tu lista.'); }} className="text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
-                  </div>
-                ))}
-                {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
-                </div>
-                {filteredFriends.length > 6 && <button type="button" onClick={() => setShowAllFriends((value) => !value)} className="w-full mt-3 rounded-xl border border-blue-500/20 py-2.5 text-xs font-bold text-blue-500 flex items-center justify-center">{showAllFriends ? <ChevronUp size={14} className="mr-1"/> : <ChevronDown size={14} className="mr-1"/>}{showAllFriends ? 'Mostrar solo 6' : `Mostrar los ${filteredFriends.length}`}</button>}
-              </div>
-            )}
+
           </div>
         )}
 
@@ -1585,12 +1593,13 @@ function SessionApp({ user, hasAdminClaim }) {
         {/* TAB 5: SETTINGS */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-right-4">
-            <PrivacyPanel user={user} theme={theme}/>
             
             <div className="flex justify-between items-center mb-6">
               <HeaderTitle icon={Settings} title={`Ajustes · ${APP_VERSION}`} colorClass="text-slate-400" theme={theme} />
               <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
             </div>
+
+            <h2 className="text-lg font-bold">Cuenta y sincronización</h2>
             
             {/* ESTADO DE CUENTA INTELIGENTE */}
             {isPermanentlyLinked ? (
@@ -1639,34 +1648,6 @@ function SessionApp({ user, hasAdminClaim }) {
               <h3 className="font-bold">Control de compartición</h3><p className={`mt-2 text-sm ${textMuted}`}>Quitar un compañero solo limpia tu lista. Para retirar el acceso de todos, desactiva la compartición. Al reactivarla tendrás un código nuevo; no borra copias ya vistas.</p><button type="button" onClick={changeSharing} disabled={sharingBusy || isOffline || syncState === 'loading'} className="mt-3 min-h-11 rounded-xl border border-blue-500 p-3 font-bold disabled:opacity-50">{sharingBusy ? 'Confirmando…' : sharingEnabled ? 'Dejar de compartir mi roster' : 'Reactivar con un código nuevo'}</button>
             </div>
 
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex gap-3">
-                  <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${reminderSettings.enabled ? 'bg-emerald-500/15 text-emerald-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}>
-                    {reminderSettings.enabled ? <BellRing size={19}/> : <Bell size={19}/>}
-                  </div>
-                  <div><h3 className="font-bold text-sm">Alertas de subida y bajada</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Te avisamos al abrir RosterMax cuando se acerca un cambio. Las alertas con la app cerrada llegarán en una fase Push posterior.</p></div>
-                </div>
-              </div>
-              <div className="grid grid-cols-[1fr_auto] gap-3 mt-4">
-                <select value={reminderSettings.leadDays} onChange={(event) => updateReminderLeadDays(event.target.value)} className={`rounded-xl px-3 py-2 text-xs border outline-none ${inputBg}`}>
-                  <option value="1">Avisar 1 día antes</option>
-                  <option value="2">Avisar 2 días antes</option>
-                  <option value="3">Avisar 3 días antes</option>
-                  <option value="7">Avisar 7 días antes</option>
-                </select>
-                {reminderSettings.enabled ? (
-                  <button type="button" onClick={disableTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold border border-red-500/30 text-red-400">Desactivar</button>
-                ) : (
-                  <button type="button" onClick={requestTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold bg-emerald-500 text-white">Activar</button>
-                )}
-              </div>
-            </div>
-
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className={`h-10 w-10 rounded-xl flex-shrink-0 flex items-center justify-center ${privacySettings.analyticsEnabled ? 'bg-blue-500/15 text-blue-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}><Activity size={19}/></div><div><h3 className="font-bold text-sm">Ayudar a mejorar RosterMax</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Medición opcional vinculada a un identificador de cuenta. El panel muestra resultados agregados, sin nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.</p></div></div><button type="button" role="switch" aria-label="Ayudar a mejorar RosterMax" aria-checked={privacySettings.analyticsEnabled} onClick={toggleAnalytics} className={`w-12 h-7 rounded-full p-1 flex-shrink-0 transition-colors ${privacySettings.analyticsEnabled ? 'bg-blue-500 justify-end' : 'bg-slate-600 justify-start'}`}><span className="block h-5 w-5 rounded-full bg-white shadow"/></button></div>
-              <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Al apagarlo borramos tu registro de actividad y dejamos de medir. Los conteos publicitarios anteriores se conservan asociados a tu identificador.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
-            </div>
 
             <button type="button" onClick={reopenOnboarding} className={`w-full rounded-2xl border p-4 flex items-center justify-between text-left ${cardClasses[theme]}`}>
               <div><p className="font-bold text-sm">Volver a ver la guía inicial</p><p className={`text-[10px] mt-0.5 ${textMuted}`}>Reconfigura tu diagrama y nombre paso a paso.</p></div>
@@ -1687,6 +1668,7 @@ function SessionApp({ user, hasAdminClaim }) {
               </form>
             </div>
 
+            <h2 className="text-lg font-bold">Perfil laboral</h2>
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos Laborales</h3>
               <form onSubmit={updateProfile} className="space-y-4">
@@ -1757,6 +1739,40 @@ function SessionApp({ user, hasAdminClaim }) {
               {(rosterConfig.periods || []).length > 0 && <details className="mt-3 text-sm"><summary>Historial de vigencias</summary><p>Base: {rosterConfig.workDays} × {rosterConfig.restDays}, ciclo {rosterConfig.startDate}</p>{rosterConfig.periods.map((p) => <p key={p.effectiveDate}>Desde {p.effectiveDate}: {p.workDays} × {p.restDays}, ciclo {p.startDate}</p>)}</details>}
             </div>
 
+            <h2 className="text-lg font-bold">Avisos</h2>
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex gap-3">
+                  <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${reminderSettings.enabled ? 'bg-emerald-500/15 text-emerald-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}>
+                    {reminderSettings.enabled ? <BellRing size={19}/> : <Bell size={19}/>}
+                  </div>
+                  <div><h3 className="font-bold text-sm">Alertas de subida y bajada</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Te avisamos al abrir RosterMax cuando se acerca un cambio. Las alertas con la app cerrada llegarán en una fase Push posterior.</p></div>
+                </div>
+              </div>
+              <div className="grid grid-cols-[1fr_auto] gap-3 mt-4">
+                <select value={reminderSettings.leadDays} onChange={(event) => updateReminderLeadDays(event.target.value)} className={`rounded-xl px-3 py-2 text-xs border outline-none ${inputBg}`}>
+                  <option value="1">Avisar 1 día antes</option>
+                  <option value="2">Avisar 2 días antes</option>
+                  <option value="3">Avisar 3 días antes</option>
+                  <option value="7">Avisar 7 días antes</option>
+                </select>
+                {reminderSettings.enabled ? (
+                  <button type="button" onClick={disableTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold border border-red-500/30 text-red-400">Desactivar</button>
+                ) : (
+                  <button type="button" onClick={requestTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold bg-emerald-500 text-white">Activar</button>
+                )}
+              </div>
+            </div>
+
+
+            <h2 className="text-lg font-bold">Privacidad y datos personales</h2>
+            <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
+              <div className="flex items-start justify-between gap-4"><div className="flex gap-3"><div className={`h-10 w-10 rounded-xl flex-shrink-0 flex items-center justify-center ${privacySettings.analyticsEnabled ? 'bg-blue-500/15 text-blue-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}><Activity size={19}/></div><div><h3 className="font-bold text-sm">Ayudar a mejorar RosterMax</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Medición opcional vinculada a un identificador de cuenta. El panel muestra resultados agregados, sin nombre, correo, empresa, ubicación, tareas, finanzas ni motivos de licencia.</p></div></div><button type="button" role="switch" aria-label="Ayudar a mejorar RosterMax" aria-checked={privacySettings.analyticsEnabled} onClick={toggleAnalytics} className={`w-12 h-7 rounded-full p-1 flex-shrink-0 transition-colors ${privacySettings.analyticsEnabled ? 'bg-blue-500 justify-end' : 'bg-slate-600 justify-start'}`}><span className="block h-5 w-5 rounded-full bg-white shadow"/></button></div>
+              <p className={`mt-3 text-[9px] ${textMuted}`}>{privacySettings.analyticsEnabled ? 'Activado. Al apagarlo borramos tu registro de actividad y dejamos de medir. Los conteos publicitarios anteriores se conservan asociados a tu identificador.' : 'Desactivado por defecto. La app funciona igual sin compartir métricas.'}</p>
+            </div>
+
+            <PrivacyPanel user={user} theme={theme}/>
+            <h2 className="text-lg font-bold">Apariencia</h2>
             <div className={`rounded-2xl border p-5 space-y-4 mb-10 ${cardClasses[theme]}`}>
               <h3 className="font-bold flex items-center"><Sun size={18} className="mr-2 text-amber-500"/> Apariencia de Interfaz</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -1782,7 +1798,9 @@ function SessionApp({ user, hasAdminClaim }) {
 
             <CeoAudiencePanel theme={theme} census={census} censusState={censusState} activityState={activityState} audience={audienceSummary} refreshing={censusRefreshing} refreshError={censusError} onRefresh={refreshAccountCensus} today={today} activityUpdatedAt={activityUpdatedAt} activityDocs={activityMetrics} ownerUid={user.uid}/>
 
-            <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5">
+            <CeoOperationsPanel user={user} theme={theme}/>
+
+            <details className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5"><summary className="min-h-11 cursor-pointer py-2 font-bold text-amber-500">Nueva campaña patrocinada</summary>
               <h3 className="font-bold flex items-center mb-1 text-amber-500"><Megaphone size={18} className="mr-2"/> Nueva campaña patrocinada</h3>
               <p className={`text-[10px] mb-4 ${textMuted}`}>Para la beta, tú cargas y pausas cada campaña. La segmentación se evalúa en el dispositivo y no entrega datos del trabajador al anunciante.</p>
               <form onSubmit={launchAd} className="space-y-3">
@@ -1799,7 +1817,7 @@ function SessionApp({ user, hasAdminClaim }) {
                 </div>
                 <button type="submit" className="w-full bg-amber-500 text-slate-900 font-bold py-3 rounded-xl text-sm hover:bg-amber-400 transition-colors shadow-lg shadow-amber-500/20 active:scale-95">Publicar campaña</button>
               </form>
-            </div>
+            </details>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 className="font-bold mb-2">Campañas</h3><p className="text-xs opacity-75">Fuente: campaign_metrics · acumulado por campaña desde su primera medición voluntaria · cobertura: cuentas que consintieron, sin exclusiones. Última lectura: {campaignUpdatedAt?.toLocaleString('es-AR') || '—'}. No mide conversiones ni ventas.</p><p className={`text-[10px] mb-4 ${textMuted}`}>Eventos enviados desde la app por cuentas que aceptaron medir. Alcance = cuentas con vistas, no personas verificadas. Datos orientativos, sin auditoría antifraude.</p>
@@ -1818,11 +1836,11 @@ function SessionApp({ user, hasAdminClaim }) {
               )}
             </div>
 
-            <CeoOperationsPanel user={user} theme={theme}/>
+
           </div>
         )}
 
-      </main>
+      </Suspense></main>
 
       <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'}`}>
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">

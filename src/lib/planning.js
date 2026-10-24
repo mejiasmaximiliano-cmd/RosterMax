@@ -50,6 +50,20 @@ export function getUpcomingRestWindows(startDate, config, { limit = 3, horizonDa
   return windows;
 }
 
+// Presentation only: keep the remaining-window contract used by budgets/plans.
+export function describeRestWindow(today, config) {
+  const remaining = getNextRestWindow(today, config);
+  if (!remaining) return null;
+  let fullStart = remaining.startDate;
+  let previousDays = 0;
+  if (fullStart === today) {
+    while (previousDays < 1464 && isRestAvailable(getStatusForDate(addDaysToDate(fullStart, -1), config))) {
+      fullStart = addDaysToDate(fullStart, -1); previousDays++;
+    }
+  }
+  return { ...remaining, fullStart, fullDays: remaining.days + previousDays, remainingDays: remaining.days, includesToday: remaining.startDate === today, startTruncated: previousDays === 1464 };
+}
+
 export function getTaskSummary(tasks, today) {
   const open = (tasks || []).filter((task) => !task.completed);
   const completed = (tasks || []).filter((task) => task.completed);

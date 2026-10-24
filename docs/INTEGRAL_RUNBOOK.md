@@ -1,6 +1,24 @@
-# Publicación, configuración y reversión — no ejecutadas
+# Publicación, configuración y reversión
 
-Esta misión no hizo push, merge, deploy ni escrituras en producción. Los pasos siguientes requieren una autorización posterior. No ejecutar el script de diagnóstico con `--publish` durante una revisión de solo lectura.
+La autorización del propietario del 24/10/2026 sustituye el cierre local anterior: permite commits, push, integración, frontend y reglas compatibles en producción. El resultado efectivo y los identificadores publicados se registran en `ROSTERMAX_RELEASE_REPORT.md`. No cargar fixtures en producción. El censo sigue siendo una operación manual, no un proceso automático.
+
+## Entrega beta-0.7: procedimiento vigente
+
+1. Fetch y comprobar cambios remotos; conservar auditoría previa. Ejecutar lint, `npm audit --omit=dev` y suite con emuladores demo/loopback.
+2. El build de Vercel selecciona explícitamente `node scripts/build-production.mjs` mediante vercel.json. Solo acepta VERCEL_ENV=production; sin Vercel, la compilación local requiere `--production`. Se revisó la configuración web pública existente y se versionó en `config/production.public.json` (no contiene credenciales de servidor). Una variable de Vercel contradictoria detiene la publicación. No hay respaldo silencioso del build genérico ni del modo local a producción; no se necesita crear preview. La preview sigue rechazando destinos productivos.
+3. `node scripts/release-production-state.mjs`: lectura agregada de reglas desplegadas y estados de feedback. No cambia nada ni devuelve contenido personal.
+4. `npx firebase deploy --only firestore:rules --project rostermax-60242 --non-interactive`. Verificar de nuevo que la huella desplegada coincide con firestore.rules.
+5. Compilar con `node scripts/build-production.mjs --production`. Commit de implementación separado, integrar por fast-forward con main actualizado y push normal (nunca force). Vercel ya está conectado a ese repositorio; esperar estado y comprobar `/version.json`, HTML y todos los recursos referenciados. Los pushes solo de reportes/capturas se omiten mediante ignoreCommand; no simular su publicación como un nuevo frontend.
+6. `node scripts/diagnose-ceo.mjs --publish`: enumeración completa y actualización exclusivamente del censo agregado. Esta acción CLI no pasa por la interfaz y no genera el evento administrativo de la app; registrarla en el reporte de entrega. Sin credenciales, conservar el último censo e indicar el botón manual que debe usar el propietario.
+7. Repetir lecturas de reglas, censo y conteos de feedback; no escribir planes, compensatorios ni fixtures en cuentas reales. Comprobar recursos públicos y ejecución sin mutaciones de backend; OAuth y recorridos con cuentas reales requieren el teléfono del propietario.
+
+## Reversión concreta del frontend (sin revertir reglas ni datos)
+
+Base local anterior comprobada: `44975c7` (incluye aislamiento, compensatorios y vigencias). Ante un fallo crítico, crear una rama desde main y restaurar **solo** `src`, `public`, `index.html`, `vite.config.js`, `e2e` y `tests` desde ese commit con `git restore --source=44975c7 -- ...`. Conservar `config/production.public.json`, `scripts/build-production.mjs`, vercel.json, dependencias actualizadas y **firestore.rules nuevas**. Ejecutar la suite anterior con emuladores y el build production explícito, hacer un commit correctivo e integrarlo/push a main. No volver al frontend 8db6d54, que ignora vigencias; no cambiar IDs, aplanar historial ni borrar IndexedDB. La reversión mantiene el modelo de deudas/entradas, pero la UI anterior no ofrece CSV ni los nuevos detalles visuales.
+
+La PWA puede conservar la versión anterior hasta cerrar **todas** sus ventanas. Antes de cerrar, confirmar escrituras. Si la descarga de un módulo falla, se conserva el worker completo activo, incluido su acceso offline. No usar skipWaiting ni recargar por fuerza.
+
+Las secciones siguientes se conservan como antecedente de la preparación local. Donde mencionan autorización “futura” o preview obligatorio, prevalece el procedimiento vigente de esta entrega.
 
 ## Reproducir localmente
 
