@@ -4,90 +4,90 @@
     {
       "navigation": [
         {
-          "domContentLoadedMs": 133.90000009536743,
-          "loadMs": 134
+          "domContentLoadedMs": 148.59999990463257,
+          "loadMs": 148.7000002861023
         }
       ],
       "assets": [
         {
-          "name": "index-iN_hiyoI.js",
-          "bytes": 1036798,
-          "durationMs": 15.900000095367432
+          "name": "index-B3uPtu_i.js",
+          "bytes": 1038037,
+          "durationMs": 20.09999990463257
         },
         {
           "name": "jsx-runtime-Am8b9ysO.js",
           "bytes": 8276,
-          "durationMs": 17.09999990463257
+          "durationMs": 21.199999809265137
         },
         {
           "name": "createLucideIcon-DS-5y4ep.js",
           "bytes": 3076,
-          "durationMs": 20.40000009536743
+          "durationMs": 24
         },
         {
           "name": "index-Bv62WoH-.css",
           "bytes": 55567,
+          "durationMs": 22.90000009536743
+        }
+      ]
+    },
+    {
+      "navigation": [
+        {
+          "domContentLoadedMs": 150.09999990463257,
+          "loadMs": 150.2999997138977
+        }
+      ],
+      "assets": [
+        {
+          "name": "index-B3uPtu_i.js",
+          "bytes": 1038037,
+          "durationMs": 18.199999809265137
+        },
+        {
+          "name": "jsx-runtime-Am8b9ysO.js",
+          "bytes": 8276,
+          "durationMs": 18.90000009536743
+        },
+        {
+          "name": "createLucideIcon-DS-5y4ep.js",
+          "bytes": 3076,
+          "durationMs": 21.90000009536743
+        },
+        {
+          "name": "index-Bv62WoH-.css",
+          "bytes": 55567,
+          "durationMs": 20.90000009536743
+        }
+      ]
+    },
+    {
+      "navigation": [
+        {
+          "domContentLoadedMs": 145.09999990463257,
+          "loadMs": 145.19999980926514
+        }
+      ],
+      "assets": [
+        {
+          "name": "jsx-runtime-Am8b9ysO.js",
+          "bytes": 8276,
           "durationMs": 19.199999809265137
-        }
-      ]
-    },
-    {
-      "navigation": [
-        {
-          "domContentLoadedMs": 143,
-          "loadMs": 143.19999980926514
-        }
-      ],
-      "assets": [
-        {
-          "name": "jsx-runtime-Am8b9ysO.js",
-          "bytes": 8276,
-          "durationMs": 20.199999809265137
         },
         {
-          "name": "index-iN_hiyoI.js",
-          "bytes": 1036798,
-          "durationMs": 19.5
+          "name": "index-B3uPtu_i.js",
+          "bytes": 1038037,
+          "durationMs": 18.09999990463257
         },
         {
           "name": "createLucideIcon-DS-5y4ep.js",
           "bytes": 3076,
-          "durationMs": 22.5
+          "durationMs": 22
         },
         {
           "name": "index-Bv62WoH-.css",
           "bytes": 55567,
-          "durationMs": 24.90000009536743
-        }
-      ]
-    },
-    {
-      "navigation": [
-        {
-          "domContentLoadedMs": 141.5,
-          "loadMs": 141.59999990463257
-        }
-      ],
-      "assets": [
-        {
-          "name": "index-iN_hiyoI.js",
-          "bytes": 1036798,
-          "durationMs": 16.699999809265137
-        },
-        {
-          "name": "jsx-runtime-Am8b9ysO.js",
-          "bytes": 8276,
-          "durationMs": 17.90000009536743
-        },
-        {
-          "name": "createLucideIcon-DS-5y4ep.js",
-          "bytes": 3076,
-          "durationMs": 20.800000190734863
-        },
-        {
-          "name": "index-Bv62WoH-.css",
-          "bytes": 55567,
-          "durationMs": 19.700000286102295
+          "durationMs": 20.90000009536743
         }
       ]
     }

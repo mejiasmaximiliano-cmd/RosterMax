@@ -56,6 +56,7 @@ const PrivacyPanel = lazy(() => import('./components/PrivacyPanel'));
 import { useCeoData } from './lib/useCeoData';
 import { getCalendarDayLabel } from './lib/calendar';
 import PwaUpdateNotice from './components/PwaUpdateNotice';
+import SectionBoundary from './components/SectionBoundary';
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
@@ -1332,11 +1333,11 @@ function SessionApp({ user, hasAdminClaim }) {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6"><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
+      <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6"><SectionBoundary key={activeTab} onHome={() => setActiveTab('roster')} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
         <PwaUpdateNotice theme={theme} showControls={activeTab === 'settings'} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}/>
         {dataError && <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p>{dataError}</p><button onClick={() => window.location.reload()} className="mt-2 underline font-bold">Volver a cargar</button></div>}
         {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprueba la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
-        {(pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)) ? <p role="status" className={`text-sm ${textMuted}`}>Guardado local · <span>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</span> No confirmado por el servidor.</p> : <p role="status" className={`text-xs ${textMuted}`}>{Object.values(privateSync).some((s) => s.cached) ? 'Datos locales · esperando comprobar el servidor' : 'Datos privados confirmados por el servidor'}</p>}
+        {(compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)) ? <p role="status" className={`text-sm ${textMuted}`}>Guardado local · <span>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</span> No confirmado por el servidor.</p> : <p role="status" className={`text-xs ${textMuted}`}>{Object.values(privateSync).some((s) => s.cached) ? 'Datos locales · esperando comprobar el servidor' : 'Datos privados confirmados por el servidor'}</p>}
         {!rosterSaved && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configura tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indica cuántos días trabajas, cuántos descansas y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="mt-3 bg-emerald-500 text-white rounded-xl px-4 py-3 font-bold">Configurar mi roster</button></div>}
         
         {installPrompt && (
@@ -1840,7 +1841,7 @@ function SessionApp({ user, hasAdminClaim }) {
           </div>
         )}
 
-      </Suspense></main>
+      </Suspense></SectionBoundary></main>
 
       <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'}`}>
         <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">

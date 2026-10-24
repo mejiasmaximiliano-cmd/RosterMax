@@ -77,7 +77,16 @@ test('medición de carga inicial compilada local, tres contextos fríos; recurso
       await expect(page.getByRole('button', { name: 'Comenzar', exact: true })).toBeVisible();
       const result = await page.evaluate(() => ({ navigation: performance.getEntriesByType('navigation').map((entry) => ({ domContentLoadedMs: entry.domContentLoadedEventEnd, loadMs: entry.loadEventEnd })), assets: performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/assets/')).map((entry) => ({ name: entry.name.split('/').at(-1), bytes: entry.encodedBodySize, durationMs: entry.duration })) }));
       expect(result.assets.some((asset) => /FinancePanel|CeoAudiencePanel|CeoOperationsPanel|PlannerPanel/.test(asset.name))).toBe(false);
-      runs.push(result); await context.close();
+      runs.push(result);
+      if (i === 2) {
+        await page.getByRole('button', { name: 'Lo haré más tarde' }).click();
+        await page.route('**/assets/FinancePanel-*.js', (route) => route.abort());
+        await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact:true }).click();
+        await expect(page.getByRole('heading', { name: 'No pudimos abrir esta sección', exact:true })).toBeVisible();
+        await page.getByRole('button', { name: 'Volver a Roster', exact:true }).click();
+        await expect(page.getByRole('region', { name: 'Mis compensatorios' })).toBeVisible();
+      }
+      await context.close();
     }
     await mkdir('audit/release', { recursive: true });
     await writeFile('audit/release/initial-load-local.json', JSON.stringify({ environment: 'LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV', runs }, null, 2));
