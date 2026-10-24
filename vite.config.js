@@ -13,12 +13,12 @@ export default defineConfig(({ mode }) => {
   const environment = resolveEnvironment({ ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env });
   const commit = process.env.VERCEL_GIT_COMMIT_SHA || execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   return {
-  define: { __APP_VERSION__: JSON.stringify('beta-0.9'), __BUILD_COMMIT__: JSON.stringify(commit) },
+  define: { __APP_VERSION__: JSON.stringify('beta-0.9.1'), __BUILD_COMMIT__: JSON.stringify(commit) },
   plugins: [react(), tailwindcss(), {
     name: 'complete-pwa-version',
     configureServer(server) {
       if (!environment.isEmulator) return;
-      const handler = createVersionHandler({ readManifest: async () => JSON.stringify({ version: 'beta-0.9', commit, environment: 'emulator', build: createHash('sha256').update('emulator-' + commit).digest('hex').slice(0, 20) }) });
+      const handler = createVersionHandler({ readManifest: async () => JSON.stringify({ version: 'beta-0.9.1', commit, environment: 'emulator', build: createHash('sha256').update('emulator-' + commit).digest('hex').slice(0, 20) }) });
       server.middlewares.use('/api/version', (req, res) => { void handler(req, res); });
     },
     generateBundle(_options, bundle) {
@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
       const id = hash.digest('hex').slice(0, 20);
       const assets = Object.keys(bundle).filter((name) => name.startsWith('assets/') && /\.(js|css)$/.test(name)).map((name) => '/' + name);
       this.emitFile({ type: 'asset', fileName: 'sw.js', source: source.replace('__BUILD_ID__', id).replace('/*__PRECACHE_ASSETS__*/', JSON.stringify(assets).slice(1, -1)) });
-      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: 'beta-0.9', commit, build: id, environment: mode === 'emulator' ? 'emulator' : process.env.VITE_APP_ENV || loadEnv(mode, process.cwd(), 'VITE_').VITE_APP_ENV, builtAt: new Date().toISOString() }) });
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: 'beta-0.9.1', commit, build: id, environment: mode === 'emulator' ? 'emulator' : process.env.VITE_APP_ENV || loadEnv(mode, process.cwd(), 'VITE_').VITE_APP_ENV, builtAt: new Date().toISOString() }) });
     },
   }],
   }

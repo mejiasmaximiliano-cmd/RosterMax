@@ -69,7 +69,7 @@ function rememberTheme(uid, mode) { try { localStorage.setItem(themeKey(uid), mo
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
-const APP_VERSION = 'beta-0.9';
+const APP_VERSION = 'beta-0.9.1';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -1365,7 +1365,7 @@ function SessionApp({ user, hasAdminClaim }) {
   if (!loaded.theme || !loaded.roster || !loaded.profile || !loaded.exceptions) return <main className={`min-h-screen ${dynamicTheme} grid place-items-center p-6`}><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => navigationGuard.request(()=>window.location.reload())}>Volver a intentar</button>}</div></main>;
 
   return (
-    <div className={`min-h-screen font-sans transition-colors duration-500 ${dynamicTheme}`}>
+    <div className={`min-h-screen font-sans ${dynamicTheme}`}>
       <DiscardChanges guard={navigationGuard} theme={theme}/>
       {welcomeReady && !showOnboarding && !showExistingAccountConfirm && <WelcomeStories key={`${user.uid}:${welcomeRequest}`} theme={theme} storageKey={`rostermax:welcome-v1:${APP_ID}:${user.uid}`} isNew={isNewForWelcome} forceOpen={welcomeRequest > 0} hasRoster={rosterSaved} hasInvitation={Boolean(pendingInviteCode)} onDismiss={() => setWelcomeRequest(0)} onFinish={finishWelcome} onExisting={user.isAnonymous ? () => setShowExistingAccountConfirm(true) : undefined}/>}
       {helpQuestion !== null && <Suspense fallback={<p role="status">Abriendo ayuda…</p>}><HelpCenter theme={theme} questionId={helpQuestion} onClose={() => setHelpQuestion(null)} onNavigate={helpNavigate} onStories={() => { setHelpQuestion(null); setWelcomeRequest((n) => n + 1); }}/></Suspense>}

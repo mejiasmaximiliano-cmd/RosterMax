@@ -56,6 +56,7 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
   const submit = useCallback(async (input) => {
     if (busyRef.current) return false;
     busyRef.current = true; setBusy(true); setError('');
+    let stopLocalReceipt;
     try {
       const existing = readOutbox(user.uid).find((item) => item.id === input.id);
       if (existing?.status === 'queued') return true;
@@ -66,6 +67,14 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
       const debt = headsRef.current.find((item) => item.id === input.debtId);
       const { head, event } = buildCompensatoryChange({ ...input, debt });
       persist([...readOutbox(user.uid).filter((item) => item.id !== input.id), { ...input, status: 'queued' }]);
+      // A retained intent is not proof that Firestore's mutation reached disk.
+      // Offline, wait for the SDK's local snapshot before closing the form.
+      // Same event ID, payload, batch and outbox format; no reconstructed writes.
+      const localReceipt = !navigator.onLine ? new Promise((resolve) => {
+        stopLocalReceipt = onSnapshot(eventRef, { includeMetadataChanges:true }, (snapshot) => {
+          if (snapshot.exists() && snapshot.metadata.hasPendingWrites) resolve(true);
+        }, () => resolve(false));
+      }) : null;
       const batch = writeBatch(db);
       const headRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'compensatory_debts', input.debtId);
       if (debt) batch.update(headRef, { ...head, updatedAt: serverTimestamp() });
@@ -77,11 +86,17 @@ export function useCompensatories(user, { open, onConfirmed } = {}) {
         return false;
       });
       headsRef.current = [...headsRef.current.filter((item) => item.id !== input.debtId), { ...head, id: input.debtId, pending: true }];
-      setDebts(headsRef.current);
-      if (!navigator.onLine) return true;
+      // Display balances only from the existing SDK snapshot subscription.
+      // Optimistic refs still serialize subsequent operations, but a screen
+      // must not advertise a locally saved balance before durable persistence.
+      if (localReceipt) {
+        const accepted = await Promise.race([localReceipt, completion]);
+        if (!accepted) setError('No se confirmó el guardado local. Conservamos el intento para revisarlo.');
+        return accepted;
+      }
       return await completion;
     } catch (failure) { setError(failure?.code ? 'No se pudo comprobar el movimiento. Revisa tu conexión.' : failure.message); return false; }
-    finally { busyRef.current = false; setBusy(false); }
+    finally { stopLocalReceipt?.(); busyRef.current = false; setBusy(false); }
   }, [user.uid, persist, acknowledge]);
   const discardFailed = (id) => persist(outboxRef.current.filter((item) => item.id !== id || item.status !== 'error'));
   return { debts, entries, state, historyState, error, outbox, busy, submit, discardFailed };
