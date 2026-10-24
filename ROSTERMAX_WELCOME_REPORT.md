@@ -4,7 +4,7 @@
 
 Entrega incremental, sin reescritura: cinco historias interactivas con ejemplos ficticios, ayuda permanente con 20 preguntas, comprobación verificable de versiones, confirmaciones claras para compartir y cobertura explícita del CEO. Modo claro inicial solo cuando no existe preferencia; oscuro sigue disponible. La narración no está integrada: faltan cinco grabaciones revisadas; toda la experiencia funciona sin sonido.
 
-**Estado de publicación:** pendiente de la comprobación final de esta entrega. Este apartado se actualizará con el commit y el resultado público real; las capturas locales no certifican producción.
+**Publicada y comprobada:** [https://rostermax.vercel.app/](https://rostermax.vercel.app/), **beta-0.8**, commit `21bed255483ec8533a4703d1ea8e9a56a75c6236`, build público `8f13a2998e55e6fa5900`. Publicación Vercel correcta y comprobación pública del 24/10/2026, 17:31 UTC. Las capturas funcionales locales no se presentan como una sesión real de producción.
 
 ## Procedencia y conservación
 
@@ -47,17 +47,34 @@ El CEO muestra cuentas medidas únicas antes de filtros, excluidas e incluidas, 
 
 ## Validación
 
-Resultados finales y commit exacto se completarán tras integrar la suite y comprobar el despliegue. No se presentarán ejecuciones parciales como aprobadas.
+Validación final local sobre `21bed255483ec8533a4703d1ea8e9a56a75c6236`, integrado por fast-forward en main y enviado sin force. El resultado público se documenta por separado abajo.
 
-- Primer recorrido de integración detectó una expectativa antigua del CEO y datos ficticios heredados de ejecuciones locales anteriores. Se aisló la colección local de ese caso y se actualizó la expectativa al nuevo mensaje; no fue una pérdida de medición real.
+| Control | Resultado final |
+| --- | --- |
+| `npm run lint` | Aprobado, código de salida 0 |
+| `npm run test:all`, Auth/Firestore locales | **150/150** pruebas de lógica/reglas; **30/30** recorridos de interfaz (3,2 min); cero omitidas, canceladas o pendientes en esas suites |
+| Reglas dentro de las 150 | 19 pruebas con emulador, incluyendo CEO/claims/revocación, aislamiento entre usuarios y privacidad de compensatorios |
+| Build explícito `node scripts/build-production.mjs --production` | Aprobado; beta-0.8 y SHA exacto anteriores; proyecto/namespace productivos preservados |
+| Escritorio/tablet/móvil | 390, 768 y 1440 px; claro/oscuro equivalentes, viewport reducido para formularios, sin desbordes horizontales |
+| Regresiones | Sesiones por UID, invitados, invitación recíproca, offline y sincronización sin duplicados, CSV/revisiones, vigencias, calendario/ICS, planes, metas, presupuestos por moneda, clima/simulador |
+| Bienvenida y FAQ | Nueve recorridos nuevos: nuevo/existente, invitación pendiente antes y después de configurar, omitir/cerrar/reabrir, foco/flechas/Escape/movimiento reducido y todos los destinos de FAQ |
+| PWA y versiones | Actualización fallida/dos pestañas con worker real local; estados del comprobador con worker controlado; API de versión con nonce, errores y cabeceras; sin activación ni recarga forzadas |
+| Compartir | Cancelar sin escrituras; rechazo atómico conserva estado real; quitar de lista no revoca; retirada/rotación global y denegaciones en emulador |
+| CEO | Acceso normal denegado/propietario ficticio permitido; última lectura válida ante error; antes/excluidas/incluidas, períodos, duplicados y muestra vacía por filtros |
+| CI Linux del commit publicado | **Aprobado**: lint, build de emulador, auditoría productiva sin avisos, 150/150 lógica/reglas y 30/30 interfaz (3,0 min), cero omitidas; ejecución `40116407506` |
+
+- Primer recorrido de integración: 26/28 aprobados, dos fallos de pruebas antiguas (mensaje CEO/datos ficticios heredados y botón antiguo del onboarding). Se aislaron datos locales y adaptaron expectativas; repetición dirigida 12/12 y suite final completa 30/30. No se ocultaron fallos ni se presentaron como una pérdida de medición real.
 - Lint: aprobado en la revisión actual.
 - `npm audit --omit=dev`: cero vulnerabilidades.
 - Auditoría completa: seis avisos moderados de herramientas de desarrollo (firebase-tools y transitivas); no incluidos en frontend ni en la función de versión, que solo usa Node nativo. No se aplicó fix --force ni degradación sugerida. Permanecen como deuda de herramientas.
 - Build advierte bundle inicial superior a 500 kB; no se afirma una mejora de velocidad. Ayuda y módulos secundarios existentes permanecen separados y precacheados, conservando acceso offline.
+- Build productivo local: bundle principal 1.071,92 kB minificado / 318,43 kB gzip, más runtime, iconos y CSS. Bundle principal servido por Vercel: 1.073.254 bytes; los hashes del build local y remoto difieren, pero cada manifiesto y worker identifica de forma consistente su propio build del mismo commit. La medición de tres contextos fríos locales (DOMContentLoaded 139,6 / 140,9 / 141,2 ms) queda en `audit/welcome/regression/initial-load-local.json`; no equivale a rendimiento móvil real ni permite afirmar mejoras de velocidad.
 
 ### Evidencias y límites
 
 `audit/welcome/`: mismas fechas ficticias, dimensiones y datos en pares claro/oscuro; historias a 390 px, FAQ a 768/1440 px, cobertura CEO ficticia y estado de actualización controlado. `regression/` conserva evidencia de calendario, finanzas, compensatorios y paneles existentes. Las capturas de pruebas no son datos reales del propietario ni validación de una sesión productiva.
+
+Capturas principales: [bienvenida clara](audit/welcome/historia-1-light-390.png), [compensatorios demo claros](audit/welcome/historia-4-light-390.png), [FAQ clara 1440](audit/welcome/faq-light-1440.png), [diálogo global](audit/welcome/compartir-global-light-412.png). Comparaciones equivalentes: [bienvenida oscura](audit/welcome/historia-1-dark-390.png), [compensatorios demo oscuros](audit/welcome/historia-4-dark-390.png), [FAQ oscura 1440](audit/welcome/faq-dark-1440.png). Las capturas adicionales de diálogos, CEO y actualización usan el viewport predeterminado Pixel 7 de 412 × 839, correctamente identificado; las pruebas principales de 390/768/1440 no se sustituyen por estas. Índice y límites en [README de evidencias](audit/welcome/README.md).
 
 La comprobación pública usa GET reales de HTML, manifiesto, función de versión, worker y todos los recursos del precache. Ejecuta el frontend público con Auth interceptado **antes** de crear invitados: la captura de error de sesión es intencional, no una caída de producción. No prueba OAuth Google real, cuenta real del CEO, navegación autenticada productiva ni recepción física de notificaciones. Navegación autenticada, aislamiento y operaciones se prueban con emuladores.
 
@@ -65,14 +82,28 @@ Narración: pendiente por falta de herramienta y grabaciones revisadas. Guiones 
 
 ## Publicación y reversión
 
+### Comprobación efectiva de esta entrega
+
+- [Vercel](https://vercel.com/mejiasmaximiliano-3306s-projects/roster-max/3Z7i5m5kKnAFCkqdARuJkQTA8Syw): estado `success` para el commit publicado.
+- `/version.json` y `/sw.js`: beta-0.8, SHA esperado y build `8f13a2998e55e6fa5900`; función `/api/version` efectivamente empaquetada y operativa, con nonce exacto y hora nueva del servidor.
+- `scripts/verify-public-release.mjs`: HTML 200, once recursos JS/CSS del precache comprobados, caché PWA completa del build publicado, cero errores inesperados de ejecución o red pública. CEO y compensatorios sin sesión: HTTP 403. **Cero escrituras de producción**; Auth interceptado deliberadamente antes de crear invitado.
+- Lectura agregada posterior, 17:31:42 UTC: mismas reglas/ruleset/hash que antes y cuatro comentarios resueltos conservados. Sin cambios de reglas, roles, namespace, roster, finanzas, compensatorios, códigos ni preferencias reales.
+- Evidencia verificable: [production-check.json](audit/welcome/production-check.json) y [conservación de reglas/comentarios](audit/welcome/production-preservation.json).
+- [CI remoto](https://github.com/mejiasmaximiliano-cmd/RosterMax/actions/runs/40116407506) del mismo SHA: `success`, finalizado a las 17:34:25 UTC. Logs revisados: 150 aprobadas, cero fallidas/omitidas y 30 recorridos aprobados. Evidencia adicional en su artefacto `isolated-test-evidence` (`12569340538`).
+- El commit de cierre contiene informe/capturas y una corrección de nombres de archivos de evidencia a 412 px en el test; no cambia el frontend publicado. Se repitieron sus tres recorridos afectados y lint. Las instrucciones de Vercel omiten esa publicación sin cambios de código operativo; el manifiesto sigue identificando `21bed25`, no el commit documental posterior.
+
+### Procedimiento reproducible
+
 1. Verificar main remoto, conservar cambios posteriores y ejecutar lint/suite sobre el código final. Compilar con `node scripts/build-production.mjs --production`; nunca publicar `dist` de emuladores.
 2. Commit de implementación en rama dedicada, integrar por fast-forward y push normal a main. Vercel ejecuta el build explícito, validando variables contra la configuración pública existente. Mantener proyecto y namespace productivos; sin cambios de reglas o datos privados.
 3. Verificar estado de Vercel/CI y ejecutar `node scripts/verify-public-release.mjs <SHA>`: commit/entorno/build reales, nonce del endpoint nuevo, precache completo, denegaciones sin sesión y ausencia de errores inesperados. Volver a comprobar reglas/comentarios con `node scripts/release-production-state.mjs` (solo lectura).
-4. Reversión concreta: `git revert <commit de implementación beta-0.8>` sobre main actualizado y push normal. Eso restaura el frontend beta-0.7 y retira la función nueva; conservar las reglas desplegadas y todos los datos. Nunca revertir compensatorios, revocación o vigencias ni restaurar snapshots de datos. Confirmar el nuevo SHA servido. Alternativa operativa: rollback del despliegue Vercel beta-0.7 conocido, con comprobación posterior; no requiere tocar Firebase.
+4. Reversión concreta: `git revert 21bed255483ec8533a4703d1ea8e9a56a75c6236` sobre main actualizado y `git push origin main`. Eso restaura el código beta-0.7 y retira la función nueva; conservar las reglas desplegadas y todos los datos. Nunca revertir compensatorios, revocación o vigencias ni restaurar snapshots de datos. Confirmar el nuevo SHA servido. Alternativa operativa: rollback del despliegue Vercel beta-0.7 conocido (`ba44304ba29c0d14efc8c91487fd09637a0b73a9`), con comprobación posterior; no requiere tocar Firebase. El nuevo comprobador no estará disponible tras esa reversión del frontend.
 
 ## Recibir la actualización sin perder datos
 
 Con conexión, esperar «Datos privados confirmados por el servidor». En Ajustes, comprobar actualización. «Descargando» no es «lista». Al indicar lista, cerrar todas las pestañas y ventanas de RosterMax de ese navegador/dispositivo, incluida la PWA; después abrir otra vez. Si quedan escrituras pendientes, esperar/reintentar la sincronización antes de cerrar. No desinstalar, borrar almacenamiento ni limpiar IndexedDB/caché para actualizar. Ante error de comprobación conservar la versión utilizable y reintentar con conexión.
+
+Si todavía está abierta beta-0.7, su botón puede no mostrar el resultado nuevo: pedí la comprobación con conexión, permití que termine la descarga mediante el mecanismo existente y cerrá/reabrí todas sus ventanas. La indicación detallada de estados aparece al cargar beta-0.8. Si no llega, conservar datos y comunicar la versión visible; no intentar solucionarlo borrando almacenamiento.
 
 ## Recorrido breve en el teléfono del propietario
 

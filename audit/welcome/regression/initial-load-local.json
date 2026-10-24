@@ -1,0 +1,95 @@
+{
+  "environment": "LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV",
+  "runs": [
+    {
+      "navigation": [
+        {
+          "domContentLoadedMs": 139.59999990463257,
+          "loadMs": 139.7999997138977
+        }
+      ],
+      "assets": [
+        {
+          "name": "jsx-runtime-Am8b9ysO.js",
+          "bytes": 8276,
+          "durationMs": 21.199999809265137
+        },
+        {
+          "name": "index-CL2fS9sy.js",
+          "bytes": 1071567,
+          "durationMs": 19.59999990463257
+        },
+        {
+          "name": "index-CcFaBcbB.css",
+          "bytes": 57956,
+          "durationMs": 22.300000190734863
+        },
+        {
+          "name": "createLucideIcon-DS-5y4ep.js",
+          "bytes": 3076,
+          "durationMs": 23.40000009536743
+        }
+      ]
+    },
+    {
+      "navigation": [
+        {
+          "domContentLoadedMs": 140.90000009536743,
+          "loadMs": 141.09999990463257
+        }
+      ],
+      "assets": [
+        {
+          "name": "index-CL2fS9sy.js",
+          "bytes": 1071567,
+          "durationMs": 18
+        },
+        {
+          "name": "jsx-runtime-Am8b9ysO.js",
+          "bytes": 8276,
+          "durationMs": 19.200000286102295
+        },
+        {
+          "name": "index-CcFaBcbB.css",
+          "bytes": 57956,
+          "durationMs": 21.199999809265137
+        },
+        {
+          "name": "createLucideIcon-DS-5y4ep.js",
+          "bytes": 3076,
+          "durationMs": 22.199999809265137
+        }
+      ]
+    },
+    {
+      "navigation": [
+        {
+          "domContentLoadedMs": 141.19999980926514,
+          "loadMs": 141.40000009536743
+        }
+      ],
+      "assets": [
+        {
+          "name": "index-CL2fS9sy.js",
+          "bytes": 1071567,
+          "durationMs": 18.899999618530273
+        },
+        {
+          "name": "jsx-runtime-Am8b9ysO.js",
+          "bytes": 8276,
+          "durationMs": 20.09999990463257
+        },
+        {
+          "name": "createLucideIcon-DS-5y4ep.js",
+          "bytes": 3076,
+          "durationMs": 20.800000190734863
+        },
+        {
+          "name": "index-CcFaBcbB.css",
+          "bytes": 57956,
+          "durationMs": 23.09999990463257
+        }
+      ]
+    }
+  ]
+}

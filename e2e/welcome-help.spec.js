@@ -126,7 +126,7 @@ test('compartir: cancelar sin escrituras, fallo de servidor conserva estado y qu
   const button=page.getByRole('button',{name:'Dejar de compartir con todos',exact:true});
   await button.click(); const dialog=page.getByRole('dialog',{name:'Dejar de compartir con todos',exact:true});
   await expect(dialog.getByText('Conservás los compañeros de tu lista y todos tus datos.',{exact:true})).toBeVisible();
-  await screenshot(page,'compartir-global-light-390');
+  await screenshot(page,'compartir-global-light-412');
   await dialog.getByRole('button',{name:'Cancelar',exact:true}).click(); expect(await settings()).toEqual(initial);
   // Emulator-only corruption makes the delete fail rules; the atomic batch must roll back.
   const publicDoc=await get(request,`public/data/sync_codes/${code}`);
@@ -140,7 +140,7 @@ test('compartir: cancelar sin escrituras, fallo de servidor conserva estado y qu
   await page.getByRole('navigation').getByRole('button',{name:'Equipo',exact:true}).click();
   await page.getByRole('button',{name:'Eliminar a Camila demo',exact:true}).click();
   const individual=page.getByRole('dialog',{name:'Quitar a Camila demo de mi lista',exact:true});
-  await screenshot(page,'quitar-companero-light-390');
+  await screenshot(page,'quitar-companero-light-412');
   await expect(individual).toContainText('no revoca su acceso'); await individual.getByRole('button',{name:'Cancelar',exact:true}).click();
   expect(await get(request,`users/${id}/friends/fake-manual`)).not.toBeNull();
   await page.getByRole('button',{name:'Eliminar a Camila demo',exact:true}).click(); await individual.getByRole('button',{name:'Quitar de mi lista',exact:true}).click();
@@ -189,7 +189,7 @@ test('comprobador coordina comprobando, descarga, fallo y worker listo sin activ
   await expect(panel.getByRole('heading',{name:'Descargando actualización',exact:true})).toBeVisible();
   await page.evaluate(()=>window.updateFixture.complete());
   await expect(panel.getByRole('heading',{name:'Actualización lista para activar',exact:true})).toBeVisible();
-  await screenshot(page,'version-lista-light-390');
+  await screenshot(page,'version-lista-light-412');
   expect(await page.evaluate(()=>window.workerMessages)).toEqual(['GET_ROSTERMAX_VERSION']);
   await expect(panel).toContainText('No borres datos ni reinstales');
 });
@@ -209,7 +209,7 @@ test('CEO protegido muestra cobertura antes/excluida/incluida y explica muestra 
   await region.getByLabel('UID de pruebas a excluir de actividad').fill(owners.filter(owner=>owner!==id).join(' '));
   await expect(coverage).toContainText('Incluidas: 0'); await expect(coverage).toContainText('vacía por los filtros');
   await expect(coverage).not.toContainText('No hay medición original');
-  await screenshot(page,'ceo-cobertura-light-390');
+  await screenshot(page,'ceo-cobertura-light-412');
 });
 
 test('invitación de usuario nuevo atraviesa bienvenida y configuración sin aceptación automática', async ({ page, request }) => {

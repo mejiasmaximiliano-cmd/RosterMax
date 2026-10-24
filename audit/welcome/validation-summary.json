@@ -1,0 +1,28 @@
+{
+  "runtimeCommit": "21bed255483ec8533a4703d1ea8e9a56a75c6236",
+  "version": "beta-0.8",
+  "local": {
+    "lint": "passed",
+    "unitAndRules": { "passed": 150, "failed": 0, "skipped": 0, "cancelled": 0 },
+    "e2e": { "passed": 30, "failed": 0, "duration": "3.2 minutes" },
+    "productionBuild": "passed: node scripts/build-production.mjs --production",
+    "productionDependencyAudit": { "vulnerabilities": 0 },
+    "developmentDependencyAudit": { "moderate": 6, "high": 0, "critical": 0 }
+  },
+  "remoteCI": {
+    "runId": 40116407506,
+    "jobId": 120938492491,
+    "url": "https://github.com/mejiasmaximiliano-cmd/RosterMax/actions/runs/40116407506",
+    "completedAt": "2026-10-24T17:34:25Z",
+    "conclusion": "success",
+    "unitAndRules": { "passed": 150, "failed": 0, "skipped": 0 },
+    "e2e": { "passed": 30, "duration": "3.0 minutes" },
+    "artifactId": 12569340538
+  },
+  "notClaimed": [
+    "Real Google OAuth or real-owner authenticated production navigation",
+    "Physical installed PWA update, hardware keyboard or notification delivery",
+    "Integrated or listened-to narration: five reviewed recordings are missing",
+    "Total downloads, all users measured, commercial reach or phone-speed improvement"
+  ]
+}

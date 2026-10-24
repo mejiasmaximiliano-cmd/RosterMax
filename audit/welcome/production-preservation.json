@@ -1,0 +1,25 @@
+{
+  "method": "Read-only administrative aggregate queries; no identifiers or message contents retained",
+  "project": "rostermax-60242",
+  "namespace": "roster-max-production",
+  "beforeCheckedAt": "2026-10-24T17:19:21.239Z",
+  "afterCheckedAt": "2026-10-24T17:31:42.251Z",
+  "rules": {
+    "rulesetBeforeAndAfter": "ce318a10-bd90-4082-965e-35605e9f385a",
+    "updatedAtBeforeAndAfter": "2026-10-24T12:45:04.918646Z",
+    "normalizedSha256BeforeAndAfter": "6ccbeacc7c57ad1ded8957e3e383caca08d808ec5ba9630e87a1152033ed5e03",
+    "matchesLocal": true,
+    "rulesDeployedByThisDelivery": false
+  },
+  "feedbackBefore": { "all": 4, "new": 0, "in_progress": 0, "resolved": 4 },
+  "feedbackAfter": { "all": 4, "new": 0, "in_progress": 0, "resolved": 4 },
+  "versionEndpointCheck": {
+    "checkedAt": "2026-10-24T17:34:00.459Z",
+    "status": 200,
+    "cacheControl": "no-store, max-age=0",
+    "age": "0",
+    "vercelCache": "MISS",
+    "nonceMatched": true,
+    "commit": "21bed255483ec8533a4703d1ea8e9a56a75c6236"
+  }
+}
