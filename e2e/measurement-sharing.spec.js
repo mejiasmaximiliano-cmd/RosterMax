@@ -33,7 +33,7 @@ test('consentimiento, operación estable y borrado de medición no borran el pla
   await expect(page.getByRole('switch')).toHaveAttribute('aria-checked','true');
   await page.getByRole('navigation').getByRole('button',{name:'Franco',exact:true}).click();
   await page.getByRole('button',{name:'Nuevo plan',exact:true}).click();
-  await page.getByLabel('¿Qué quieres hacer?').fill('Plan privado de prueba');
+  await page.getByLabel('¿Qué querés hacer?').fill('Plan privado de prueba');
   await page.getByRole('button',{name:'Guardar plan',exact:true}).click();
   await expect.poll(async () => (await ownedEvents(request,uid)).length).toBe(1);
   const event = (await ownedEvents(request,uid))[0];

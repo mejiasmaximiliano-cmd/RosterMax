@@ -1,13 +1,13 @@
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { 
-  Calendar, CheckSquare, TrendingUp, User, 
+  Calendar, User,
   Settings, Target, Plus, Trash2, AlertCircle, ChevronRight,
   Briefcase, Sun, Moon, Search, FileText,
   CheckCircle2, Circle, X, Users,
   Plane, Thermometer, Zap,
   Share2, MapPin, Building2, Truck, BriefcaseBusiness,
   CloudOff, ShieldAlert, Download, Send, Smartphone,
-  Megaphone, Bell, BellRing, Clock3, Link2, LogIn, LogOut,
+  Megaphone, Bell, BellRing, Link2, LogIn, LogOut,
   ExternalLink, MessageSquare, PauseCircle, Umbrella, Stethoscope,
   CalendarRange, Activity, ChevronDown,
   ChevronUp, Filter, Clock, Pencil
@@ -54,11 +54,14 @@ import { useFeatureMeasurement } from './lib/useFeatureMeasurement';
 import Modal from './components/Modal';
 const PrivacyPanel = lazy(() => import('./components/PrivacyPanel'));
 import { useCeoData } from './lib/useCeoData';
-import { getCalendarDayLabel } from './lib/calendar';
 import PwaUpdateNotice from './components/PwaUpdateNotice';
 import SectionBoundary from './components/SectionBoundary';
 import WelcomeStories from './components/WelcomeStories';
 import { welcomeState } from './lib/welcomeState';
+import BottomNav from './components/BottomNav';
+import SyncStatus from './components/SyncStatus';
+import DiscardChanges from './components/DiscardChanges';
+import { useFormTracking, useDiscardGuard, readForm, markFormSaved } from './lib/formGuard';
 const HelpCenter = lazy(() => import('./components/HelpCenter'));
 const themeKey = (uid) => `rostermax:theme:${APP_ID}:${uid}`;
 function cachedTheme(uid) { try { return localStorage.getItem(themeKey(uid)) === 'dark' ? 'dark' : 'light'; } catch { return 'light'; } }
@@ -66,7 +69,7 @@ function rememberTheme(uid, mode) { try { localStorage.setItem(themeKey(uid), mo
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
-const APP_VERSION = 'beta-0.8';
+const APP_VERSION = 'beta-0.9';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
@@ -171,6 +174,9 @@ export default function App() {
 function SessionApp({ user, hasAdminClaim }) {
   // --- STATES ---
   const today = useToday();
+  useFormTracking();
+  const navigationGuard = useDiscardGuard();
+  const submittedForm = useRef(null);
   const [activeTab, setActiveTab] = useState(() => getInviteCodeFromLocation() ? 'crew' : 'roster');
   const [theme, setTheme] = useState(() => cachedTheme(user.uid));
   const themeIntent = useRef(null);
@@ -215,10 +221,12 @@ function SessionApp({ user, hasAdminClaim }) {
   const [rosterSaved, setRosterSaved] = useState(false);
   const [confirmed, setConfirmed] = useState({});
   const sharedReady = confirmed.roster && confirmed.profile && confirmed.exceptions;
+  const feedbackBusy = useRef(false);
+  const [feedbackState,setFeedbackState] = useState({busy:false,error:'',message:''});
+  const [exceptionError,setExceptionError] = useState('');
   const [dataError, setDataError] = useState('');
   const [pendingWrites, setPendingWrites] = useState(0);
   const [compensatoriesPending, setCompensatoriesPending] = useState(false);
-  const [calendarDate, setCalendarDate] = useState('');
   const [privateSync, setPrivateSync] = useState({});
   const [userProfile, setUserProfile] = useState(DEFAULT_PROFILE);
   const [tasks, setTasks] = useState([]);
@@ -273,7 +281,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const refreshAccountCensus = async () => {
     if (!isAdmin || censusBusyRef.current) return;
-    if (isOffline) { setCensusError('Conéctate a internet para actualizar el censo.'); return; }
+    if (isOffline) { setCensusError('Conectate a internet para actualizar el censo.'); return; }
     censusBusyRef.current = true;
     setCensusRefreshing(true);
     setCensusError('');
@@ -295,15 +303,15 @@ function SessionApp({ user, hasAdminClaim }) {
       showToast('Censo actualizado. Se guardaron únicamente totales.');
     } catch (error) {
       const messages = {
-        'census/permission-denied': 'Google no autorizó la lectura de las cuentas de Firebase. Usa la cuenta propietaria del proyecto y acepta el permiso solicitado.',
-        'census/expired-token': 'La autorización de Google venció. Intenta actualizar de nuevo.',
-        'census/timeout': 'La consulta tardó demasiado. Conservamos el último censo completo; vuelve a intentarlo.',
-        'auth/user-mismatch': 'Selecciona la misma cuenta de Google con la que entraste al panel CEO.',
+        'census/permission-denied': 'Google no autorizó la lectura de las cuentas de Firebase. Usá la cuenta propietaria del proyecto y aceptá el permiso solicitado.',
+        'census/expired-token': 'La autorización de Google venció. Intentá actualizar de nuevo.',
+        'census/timeout': 'La consulta tardó demasiado. Conservamos el último censo completo; volvé a intentarlo.',
+        'auth/user-mismatch': 'Seleccioná la misma cuenta de Google con la que entraste al panel CEO.',
         'auth/popup-closed-by-user': 'Se cerró la autorización. El censo anterior sigue guardado.',
-        'auth/popup-blocked': 'El navegador bloqueó la ventana. Permite ventanas emergentes o abre RosterMax en Chrome.',
-        'permission-denied': 'No se pudo guardar el censo. Revisa los permisos privados del panel CEO.',
+        'auth/popup-blocked': 'El navegador bloqueó la ventana. Permití ventanas emergentes o abrí RosterMax en Chrome.',
+        'permission-denied': 'No se pudo guardar el censo. Revisá los permisos privados del panel CEO.',
       };
-      setCensusError(messages[error?.code] || 'No se pudo completar la actualización. Conservamos el último censo; revisa tu conexión y vuelve a intentarlo.');
+      setCensusError(messages[error?.code] || 'No se pudo completar la actualización. Conservamos el último censo; revisá tu conexión y volvé a intentarlo.');
     } finally {
       censusBusyRef.current = false;
       setCensusRefreshing(false);
@@ -311,17 +319,22 @@ function SessionApp({ user, hasAdminClaim }) {
   };
 
   const savePrivate = async (promise, message) => {
+    const form = submittedForm.current, submittedValues = readForm(form), acceptedLocally = !navigator.onLine;
     setPendingWrites((count) => count + 1);
     const completion = promise.then(() => {
+      // Offline acceptance already marked this submission. A later server ACK
+      // must not overwrite a reset form or a new draft with its old snapshot.
+      if (!acceptedLocally) markFormSaved(form, submittedValues);
       if (navigator.onLine) showToast(message);
       return true;
     }).catch((error) => {
       console.error('No se pudo guardar el cambio.', error);
-      setDataError('Un cambio no pudo sincronizarse. Revisa tu conexión y vuelve a intentarlo.');
+      setDataError('Un cambio no pudo sincronizarse. Revisá tu conexión y volvé a intentarlo.');
       return false;
     }).finally(() => setPendingWrites((count) => Math.max(0, count - 1)));
-    if (!navigator.onLine) {
-      showToast('Cambio en cola. Se enviará al recuperar conexión.');
+    if (acceptedLocally) {
+      markFormSaved(form, submittedValues);
+      showToast('Guardado en este dispositivo · Pendiente de sincronizar.');
       return true;
     }
     return completion;
@@ -488,7 +501,7 @@ function SessionApp({ user, hasAdminClaim }) {
     };
     const logRealtimeError = (source) => (error) => {
       console.error(`Error de lectura en ${source}.`, error);
-      setDataError(`No pudimos cargar ${source}. Reintenta con conexión antes de modificar tus datos.`);
+      setDataError(`No pudimos cargar ${source}. Reintentá con conexión antes de modificar tus datos.`);
     };
     const markLoaded = (key) => setLoaded((current) => ({ ...current, [key]: true }));
     const confirmShared = (key, snapshot) => {
@@ -720,9 +733,9 @@ function SessionApp({ user, hasAdminClaim }) {
   }, [reminderSettings, rosterConfig, scheduleExceptions, today, rosterSaved, loaded.exceptions, user.uid]);
 
   const effectiveRoster = useMemo(() => ({ ...rosterConfig, exceptions: scheduleExceptions }), [rosterConfig, scheduleExceptions]);
-  const currentStatus = useMemo(() => rosterSaved ? getStatusForDate(today, effectiveRoster) : { error: 'Configura tu roster' }, [effectiveRoster, today, rosterSaved]);
-  const nextTransition = useMemo(() => rosterSaved ? getNextTransition(today, effectiveRoster) : { error: 'Configura tu roster' }, [effectiveRoster, today, rosterSaved]);
-  const targetStatus = useMemo(() => rosterSaved ? getStatusForDate(targetDate, effectiveRoster) : { error: 'Configura tu roster' }, [targetDate, effectiveRoster, rosterSaved]);
+  const currentStatus = useMemo(() => rosterSaved ? getStatusForDate(today, effectiveRoster) : { error: 'Configurá tu roster' }, [effectiveRoster, today, rosterSaved]);
+  const nextTransition = useMemo(() => rosterSaved ? getNextTransition(today, effectiveRoster) : { error: 'Configurá tu roster' }, [effectiveRoster, today, rosterSaved]);
+  const targetStatus = useMemo(() => rosterSaved ? getStatusForDate(targetDate, effectiveRoster) : { error: 'Configurá tu roster' }, [targetDate, effectiveRoster, rosterSaved]);
   const upcomingCoincidences = useMemo(() => rosterSaved ? findRestCoincidences(
     today,
     effectiveRoster,
@@ -831,7 +844,7 @@ function SessionApp({ user, hasAdminClaim }) {
   };
 
   const shareMyCode = async () => {
-    if (!rosterSaved) { setShowOnboarding(true); showToast('Guarda tu roster antes de invitar.'); return; }
+    if (!rosterSaved) { setShowOnboarding(true); showToast('Guardá tu roster antes de invitar.'); return; }
     if (!sharedReady || syncState !== 'ready') { showToast('Espera a que tu roster termine de sincronizarse.'); return; }
     if (!syncCode) {
       showToast('Tu código todavía se está preparando.');
@@ -924,7 +937,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const handleWeatherSearch = async () => {
     if (weatherQuery.trim().length < 2) {
-      showToast('Escribe una ciudad o localidad cercana.');
+      showToast('Escribí una ciudad o localidad cercana.');
       return;
     }
     setWeatherSearching(true);
@@ -944,7 +957,7 @@ function SessionApp({ user, hasAdminClaim }) {
     setUserProfile((profile) => ({ ...profile, weatherLocation: location }));
     setWeatherOptions([]);
     setWeatherQuery('');
-    showToast(`Clima configurado para ${location.name}. Guarda el perfil.`);
+    showToast(`Clima configurado para ${location.name}. Guardá el perfil.`);
   };
 
   const clearPendingInvite = () => {
@@ -957,10 +970,10 @@ function SessionApp({ user, hasAdminClaim }) {
 
   // --- MULTIJUGADOR: PROCESO REAL DE VINCULACIÓN ---
   const linkSyncCode = async (rawCode, { reciprocal = false } = {}) => {
-    if (!navigator.onLine) { showToast('Conéctate para comprobar la invitación.'); return false; }
-    if (!sharedReady) { showToast('Estamos cargando tu roster guardado. Espera un momento y vuelve a intentar.'); return false; }
+    if (!navigator.onLine) { showToast('Conectate para comprobar la invitación.'); return false; }
+    if (!sharedReady) { showToast('Estamos cargando tu roster guardado. Esperá un momento y volvé a intentar.'); return false; }
     if (!rosterSaved) {
-      showToast('Configura y guarda tu roster antes de compartirlo.');
+      showToast('Configurá y guardá tu roster antes de compartirlo.');
       setShowOnboarding(true);
       return false;
     }
@@ -978,7 +991,7 @@ function SessionApp({ user, hasAdminClaim }) {
       }
       const foundUser = snapshot.data();
       if (foundUser.ownerUid === user.uid) {
-        showToast("No puedes sincronizarte contigo mismo.");
+        showToast("No podés sincronizarte contigo mismo.");
         return false;
       }
       const existingConnection = findExistingConnection(friends, foundUser.ownerUid, codeInput);
@@ -1112,6 +1125,7 @@ function SessionApp({ user, hasAdminClaim }) {
   const createScheduleException = async (event) => {
     event.preventDefault();
     if (exceptionBusy) return;
+    setExceptionError('');
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const validation = validateScheduleException({
@@ -1125,7 +1139,7 @@ function SessionApp({ user, hasAdminClaim }) {
       cycleStartDate: form.get('cycleStartDate'),
     }, scheduleExceptions);
     if (!validation.valid) {
-      showToast(validation.error);
+      setExceptionError(validation.error);
       return;
     }
     try {
@@ -1133,7 +1147,7 @@ function SessionApp({ user, hasAdminClaim }) {
       const saved = await savePrivate(editingException
         ? setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions', editingException.id), { ...validation.exception, updatedAt: serverTimestamp() }, { merge: true })
         : addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, 'schedule_exceptions'), { ...validation.exception, createdAt: serverTimestamp() }), 'Cambio temporal aplicado al calendario.');
-      if (!saved) return;
+      if (!saved) { setExceptionError('No se guardó el cambio. Revisá la conexión y volvé a intentarlo; conservamos lo que escribiste.'); return; }
       formElement.reset();
       setEditingException(null);
       setExceptionType('vacation');
@@ -1196,12 +1210,12 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const addFunds = async (goal, amount) => {
     if (!navigator.onLine) {
-      showToast('Conéctate para confirmar el saldo antes de registrar un aporte.');
+      showToast('Conectate para confirmar el saldo antes de registrar un aporte.');
       return false;
     }
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) {
-      showToast('Ingresa un aporte mayor que cero.');
+      showToast('Ingresá un aporte mayor que cero.');
       return false;
     }
     const goalRef = doc(db, 'artifacts', APP_ID, 'users', user.uid, 'goals', goal.id);
@@ -1226,28 +1240,32 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const submitBetaFeedback = async (event) => {
     event.preventDefault();
+    if(feedbackBusy.current) return;
+    setFeedbackState({busy:false,error:'',message:''});
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const message = String(form.get('message') || '').trim();
     if (message.length < 5) {
-      showToast('Cuéntanos un poco más para poder ayudarte.');
+      setFeedbackState({busy:false,error:'Contanos un poco más para poder ayudarte.',message:''});
       return;
     }
+    feedbackBusy.current=true; setFeedbackState({busy:true,error:'',message:''});
     try {
-      await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedback'), {
+      const saved=await savePrivate(addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'feedback'), {
         ownerUid: user.uid,
         name: getPublicName(user, userProfile),
         category: String(form.get('category') || 'idea').slice(0, 20),
         message: message.slice(0, 800),
         status: 'new',
         createdAt: serverTimestamp(),
-      });
+      }), 'Gracias. Recibimos tu comentario de beta.');
+      if(!saved) { setFeedbackState({busy:false,error:'No se confirmó el envío. Conservamos el texto para que lo revises.',message:''}); return; }
       formElement.reset();
-      showToast('Gracias. Recibimos tu comentario de beta.');
+      setFeedbackState({busy:false,error:'',message:navigator.onLine?'Comentario recibido.':'Se guardó en este dispositivo. Consultá el estado de sincronización arriba.'});
     } catch (error) {
       console.error('No se pudo enviar el feedback.', error);
-      showToast('No se pudo enviar el comentario.');
-    }
+      setFeedbackState({busy:false,error:'No se pudo enviar. Conservamos lo que escribiste; revisá tu conexión y reintentá.',message:''});
+    } finally { feedbackBusy.current=false; setFeedbackState(current=>({...current,busy:false})); }
   };
 
   // --- SMART AD ENGINE (CEO) ---
@@ -1284,7 +1302,7 @@ function SessionApp({ user, hasAdminClaim }) {
       formElement.reset();
     } catch (error) {
       console.error('No se pudo publicar el anuncio.', error);
-      showToast('No se pudo publicar la campaña. Revisa tu rol administrador.');
+      showToast('No se pudo publicar la campaña. Revisá tu rol administrador.');
     }
   };
 
@@ -1324,12 +1342,12 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const { ready: welcomeReady, automatic: isNewForWelcome } = welcomeState({ themeKnown: loaded.theme, onboardingKnown: loaded.onboarding, rosterSaved, profileStored, completed: onboardingCompleted, rosterConfirmed: confirmed.roster, profileConfirmed: confirmed.profile, anonymous: user.isAnonymous, legacyDismissed: localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' });
   const finishWelcome = () => { if (!rosterSaved) setShowOnboarding(true); else setActiveTab(pendingInviteCode ? 'crew' : 'roster'); };
-  const helpNavigate = (target) => {
+  const helpNavigate = (target) => navigationGuard.request(() => {
     setHelpQuestion(null); setHelpReturn(true);
     const tab = ['roster','crew','planner','wealth'].includes(target) ? target : ['changes','compensatories'].includes(target) ? 'roster' : 'settings';
     setActiveTab(tab);
     setHelpDestination({ target }); window.scrollTo({ top: 0 });
-  };
+  });
   const confirmRemoveFriend = async () => {
     if (removing || !removeFriend) return;
     if (isOffline || !navigator.onLine) { setRemoveError('Conectate para confirmar. No quitamos a nadie de tu lista.'); return; }
@@ -1338,14 +1356,15 @@ function SessionApp({ user, hasAdminClaim }) {
     catch { setRemoveError('No se confirmó la eliminación de tu lista. Revisá la conexión y volvé a intentar.'); }
     finally { setRemoving(false); }
   };
-  if (!loaded.theme || !loaded.roster || !loaded.profile || !loaded.exceptions) return <main className={`min-h-screen ${dynamicTheme} grid place-items-center p-6`}><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => window.location.reload()}>Volver a intentar</button>}</div></main>;
+  if (!loaded.theme || !loaded.roster || !loaded.profile || !loaded.exceptions) return <main className={`min-h-screen ${dynamicTheme} grid place-items-center p-6`}><div className="text-center space-y-4"><p role="status">{dataError || 'Cargando tu roster guardado…'}</p>{dataError && <button className="rounded-xl bg-emerald-500 px-4 py-3" onClick={() => navigationGuard.request(()=>window.location.reload())}>Volver a intentar</button>}</div></main>;
 
   return (
-    <div className={`min-h-screen font-sans pb-24 transition-colors duration-500 ${dynamicTheme}`}>
+    <div className={`min-h-screen font-sans transition-colors duration-500 ${dynamicTheme}`}>
+      <DiscardChanges guard={navigationGuard} theme={theme}/>
       {welcomeReady && !showOnboarding && !showExistingAccountConfirm && <WelcomeStories key={`${user.uid}:${welcomeRequest}`} theme={theme} storageKey={`rostermax:welcome-v1:${APP_ID}:${user.uid}`} isNew={isNewForWelcome} forceOpen={welcomeRequest > 0} hasRoster={rosterSaved} hasInvitation={Boolean(pendingInviteCode)} onDismiss={() => setWelcomeRequest(0)} onFinish={finishWelcome} onExisting={user.isAnonymous ? () => setShowExistingAccountConfirm(true) : undefined}/>}
       {helpQuestion !== null && <Suspense fallback={<p role="status">Abriendo ayuda…</p>}><HelpCenter theme={theme} questionId={helpQuestion} onClose={() => setHelpQuestion(null)} onNavigate={helpNavigate} onStories={() => { setHelpQuestion(null); setWelcomeRequest((n) => n + 1); }}/></Suspense>}
-      {sharingConfirm && <Modal title="Dejar de compartir con todos" theme={theme} onClose={() => { if (!sharingBusy) setSharingConfirm(false); }}><div className="space-y-4 text-sm"><p>Se desactiva el código actual para todos los que lo tengan.</p><p>Conservás los compañeros de tu lista y todos tus datos.</p><p>Las copias que otros ya hayan visto o guardado pueden permanecer.</p><p>Reactivar genera un código nuevo que tenés que volver a enviar. No hay una revocación individual por compañero.</p>{sharingError && <p role="alert">{sharingError}</p>}<div className="flex flex-wrap gap-3"><button disabled={sharingBusy} onClick={() => setSharingConfirm(false)} className="min-h-11 rounded-xl border px-4 disabled:opacity-50">Cancelar</button><button disabled={sharingBusy} onClick={changeSharing} className="min-h-11 rounded-xl bg-blue-700 px-4 font-bold text-white disabled:opacity-50">{sharingBusy ? 'Confirmando…' : 'Dejar de compartir con todos'}</button></div></div></Modal>}
-      {removeFriend && <Modal title={`Quitar a ${removeFriend.name} de mi lista`} theme={theme} onClose={() => { if (!removing) setRemoveFriend(null); }}><div className="space-y-4 text-sm"><p>Vas a quitar a {removeFriend.name} de tu lista. Esto no revoca su acceso a tu roster ni te quita de su equipo.</p><p>Para invalidar el código actual para todos, usá “Dejar de compartir con todos” en Ajustes.</p>{removeError && <p role="alert">{removeError}</p>}<div className="flex flex-wrap gap-3"><button disabled={removing} onClick={() => setRemoveFriend(null)} className="min-h-11 rounded-xl border px-4">Cancelar</button><button disabled={removing} onClick={confirmRemoveFriend} className="min-h-11 rounded-xl bg-blue-700 px-4 font-bold text-white">{removing ? 'Confirmando…' : 'Quitar de mi lista'}</button></div></div></Modal>}
+      {sharingConfirm && <Modal title="Dejar de compartir con todos" theme={theme} onClose={() => { if (!sharingBusy) setSharingConfirm(false); }}><div className="space-y-4 text-sm"><p>Se desactiva el código actual para todos los que lo tengan.</p><p>Conservás los compañeros de tu lista y todos tus datos.</p><p>Las copias que otros ya hayan visto o guardado pueden permanecer.</p><p>Reactivar genera un código nuevo que tenés que volver a enviar. No hay una revocación individual por compañero.</p>{sharingError && <p role="alert">{sharingError}</p>}<div className="flex flex-wrap gap-3"><button disabled={sharingBusy} onClick={() => setSharingConfirm(false)} className="min-h-11 rounded-xl border px-4 disabled:opacity-50">Cancelar</button><button disabled={sharingBusy} onClick={changeSharing} className="ux-button ux-danger">{sharingBusy ? 'Confirmando…' : 'Dejar de compartir con todos'}</button></div></div></Modal>}
+      {removeFriend && <Modal title={`Quitar a ${removeFriend.name} de mi lista`} theme={theme} onClose={() => { if (!removing) setRemoveFriend(null); }}><div className="space-y-4 text-sm"><p>Vas a quitar a {removeFriend.name} de tu lista. Esto no revoca su acceso a tu roster ni te quita de su equipo.</p><p>Para invalidar el código actual para todos, usá “Dejar de compartir con todos” en Ajustes.</p>{removeError && <p role="alert">{removeError}</p>}<div className="flex flex-wrap gap-3"><button disabled={removing} onClick={() => setRemoveFriend(null)} className="min-h-11 rounded-xl border px-4">Cancelar</button><button disabled={removing} onClick={confirmRemoveFriend} className="ux-button ux-danger">{removing ? 'Confirmando…' : 'Quitar de mi lista'}</button></div></div></Modal>}
       {showOnboarding && user && (
         <OnboardingModal
           theme={theme}
@@ -1383,32 +1402,32 @@ function SessionApp({ user, hasAdminClaim }) {
         </div>
       )}
 
-      <header className={`sticky top-0 z-40 px-4 py-4 border-b backdrop-blur-md ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/80 border-slate-800'}`}>
+      <header className={`app-header sticky top-0 z-40 px-4 py-4 border-b backdrop-blur-md ${theme === 'light' ? 'bg-white/80 border-slate-200' : 'bg-slate-950/80 border-slate-800'}`}>
         <div className="max-w-5xl mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-2 select-none">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 relative">
+          <div className="min-w-0 flex items-center gap-2 select-none">
+            <div className="app-logo w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20 relative">
               <span className="font-bold text-white">R</span>
             </div>
-            <h1 className="text-xl font-bold bg-gradient-to-r from-emerald-500 to-teal-400 bg-clip-text text-transparent">RosterMax</h1>
+            <h1 className="min-w-0 text-xl font-bold leading-tight bg-gradient-to-r from-emerald-500 to-teal-400 bg-clip-text text-transparent">Roster<wbr/>Max</h1>
           </div>
-          <button aria-label="Abrir ajustes de mi cuenta" onClick={() => setActiveTab('settings')} className={`w-8 h-8 rounded-full border flex items-center justify-center transition-colors ${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-700'} ${isAdmin ? 'ring-2 ring-amber-500 border-amber-500' : ''}`}>
+          <button aria-label="Abrir ajustes de mi cuenta" onClick={() => navigationGuard.request(()=>setActiveTab('settings'))} className={`min-w-11 min-h-11 rounded-full border flex items-center justify-center transition-colors ${theme === 'light' ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-700'} ${isAdmin ? 'ring-2 ring-amber-500 border-amber-500' : ''}`}>
             {isAdmin ? <ShieldAlert size={16} className="text-amber-500" /> : <User size={16} className={textMuted} />}
           </button>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto p-4 md:p-6 space-y-6"><SectionBoundary key={activeTab} onHome={() => setActiveTab('roster')} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
+      <main onSubmitCapture={(event) => { submittedForm.current = event.target; queueMicrotask(() => { submittedForm.current = null; }); }} className="app-content max-w-5xl mx-auto p-4 md:p-6 space-y-5"><SectionBoundary key={activeTab} onHome={() => setActiveTab('roster')} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}><Suspense fallback={<p role="status" className="py-8 text-center">Cargando sección…</p>}>
         <PwaUpdateNotice onHelp={openHelp} theme={theme} showControls={activeTab === 'settings'} pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)}/>
         {helpReturn && <button type="button" onClick={() => { setHelpReturn(false); openHelp(); }} className="min-h-11 text-sm font-bold underline">Volver a preguntas frecuentes</button>}
         {dataError && <div role="alert" className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"><p>{dataError}</p><button onClick={() => window.location.reload()} className="mt-2 underline font-bold">Volver a cargar</button></div>}
-        {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprueba la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
-        {(compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some((s) => s.pending)) ? <p role="status" className={`text-sm ${textMuted}`}>Guardado local · <span>{isOffline ? 'Cambios pendientes de sincronización' : 'Sincronizando cambios…'}</span> No confirmado por el servidor.</p> : <p role="status" className={`text-xs ${textMuted}`}>{Object.values(privateSync).some((s) => s.cached) ? 'Datos locales · esperando comprobar el servidor' : 'Datos privados confirmados por el servidor'}</p>}
-        {!rosterSaved && confirmed.roster && confirmed.profile && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configura tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indica cuántos días trabajas, cuántos descansas y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="mt-3 bg-emerald-500 text-white rounded-xl px-4 py-3 font-bold">Configurar mi roster</button></div>}
+        {syncState === 'error' && <p role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500">Tu roster está disponible aquí, pero no pudimos actualizar lo que ve tu equipo. Comprobá la conexión y recarga la app. No envíes nuevas invitaciones hasta sincronizar.</p>}
+        <SyncStatus pending={compensatoriesPending || pendingWrites > 0 || Object.values(privateSync).some(s=>s.pending)} cached={Object.values(privateSync).some(s=>s.cached)} offline={isOffline} error={Boolean(dataError)}/>
+        {!rosterSaved && confirmed.roster && confirmed.profile && <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}><h2 className="font-bold">Configurá tu primer roster</h2><p className={`mt-2 text-sm ${textMuted}`}>Indicá cuántos días trabajás, cuántos descansás y una subida conocida para calcular tus fechas.</p><button onClick={() => setShowOnboarding(true)} className="ux-button ux-primary mt-3">Configurar mi roster</button></div>}
         
         {installPrompt && (
           <div className={`border rounded-2xl p-4 flex items-center justify-between shadow-lg animate-in fade-in slide-in-from-top-4 ${theme==='light'?'bg-emerald-50 border-emerald-200':'bg-emerald-500/20 border-emerald-500/30'}`}>
-            <div><p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p><p className={`text-xs mt-0.5 ${textMuted}`}>Añade la app a tu pantalla de inicio.</p></div>
-            <button onClick={handleInstallClick} className="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 px-4 rounded-xl text-sm transition-colors shadow-lg shadow-emerald-500/30">Instalar</button>
+            <div><p className="font-bold text-emerald-500 text-sm flex items-center"><Download size={14} className="mr-1.5"/> Instalar RosterMax</p><p className={`text-xs mt-0.5 ${textMuted}`}>Agregá la app a tu pantalla de inicio.</p></div>
+            <button onClick={handleInstallClick} className="ux-button ux-primary">Instalar</button>
           </div>
         )}
 
@@ -1416,42 +1435,21 @@ function SessionApp({ user, hasAdminClaim }) {
         {activeTab === 'roster' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {rosterSaved && <RosterCalendar config={effectiveRoster} today={today} theme={theme} tasks={tasks}
-              onSelectionChange={setCalendarDate}
-              onPlanDate={(date) => { setPlannedDate(date); setActiveTab('planner'); window.scrollTo({ top: 0 }); }}
+              currentStatus={currentStatus} nextTransition={nextTransition}
+              onPlanDate={(date) => navigationGuard.request(() => { setPlannedDate(date); setActiveTab('planner'); window.scrollTo({ top: 0 }); })}
               onManageExceptions={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm(true); exceptionSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}/>
             }
-            {calendarDate && calendarDate !== today && <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`} aria-label="Estado de hoy">
-              <h2 className="text-sm font-bold">Hoy · {formatShortDate(today)}</h2>
-              <p className="mt-1 text-sm">{currentStatus.error ? 'Configura tu roster' : `${getCalendarDayLabel(currentStatus)} · día ${currentStatus.actualDay} de ${currentStatus.totalPhaseDays}`}</p>
-              <p className={`mt-1 text-xs ${textMuted}`}>Este resumen siempre corresponde a hoy; el calendario muestra la fecha que selecciones.</p>
-            </div>}
-
             <Compensatories user={user} theme={theme} today={today} onConfirmed={measureConfirmed} onPendingChange={setCompensatoriesPending} onHelp={openHelp}/>
-
-            {!nextTransition?.error && (
-              <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
-                <div className="flex items-center min-w-0">
-                  <div className={`h-10 w-10 rounded-xl flex items-center justify-center mr-3 flex-shrink-0 ${nextTransition.nextStatus === 'rest' ? 'bg-emerald-500/15 text-emerald-500' : 'bg-amber-500/15 text-amber-500'}`}>
-                    <Clock3 size={20}/>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold">{nextTransition.unavailable ? 'Próxima ausencia · no es franco' : `Próxima ${nextTransition.nextStatus === 'rest' ? 'bajada' : 'subida'}`}</p>
-                    <p className={`text-xs ${textMuted}`}>{formatShortDate(nextTransition.date)} · en {nextTransition.daysUntil} {nextTransition.daysUntil === 1 ? 'día' : 'días'}</p>
-                  </div>
-                </div>
-                {reminderSettings.enabled ? <BellRing size={18} className="text-emerald-500" aria-label="Alertas activadas"/> : <Bell size={18} className={textMuted} aria-label="Alertas desactivadas"/>}
-              </div>
-            )}
 
             <div ref={exceptionSectionRef} className={`scroll-mt-24 rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex items-start justify-between gap-3">
-                <div><h3 id="section-changes" className="font-bold flex items-center scroll-mt-24"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después vuelves automáticamente a tu diagrama habitual.</p></div>
-                <button type="button" onClick={() => { setEditingException(null); setExceptionType('vacation'); setShowExceptionForm((value) => !value); }} className="flex-shrink-0 rounded-xl bg-indigo-500 px-3 py-3 text-xs font-bold text-white">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
+                <div><h3 id="section-changes" className="font-bold flex items-center scroll-mt-24"><CalendarRange size={18} className="mr-2 text-indigo-500"/> Cambios temporales</h3><p className={`text-[10px] mt-1 ${textMuted}`}>Vacaciones, licencias o rosters especiales pisan sólo esas fechas. Después volvés automáticamente a tu diagrama habitual.</p></div>
+                <button type="button" onClick={() => navigationGuard.request(()=>{ setEditingException(null); setExceptionType('vacation'); setShowExceptionForm((value) => !value); }, exceptionSectionRef.current)} className="ux-button ux-secondary shrink-0">{showExceptionForm ? 'Cerrar' : 'Agregar'}</button>
               </div>
 
               {showExceptionForm && (
                 <form key={editingException?.id || 'new'} onSubmit={createScheduleException} className={`mt-4 space-y-3 rounded-xl border p-4 ${theme === 'light' ? 'bg-indigo-50/60 border-indigo-100' : 'bg-indigo-500/5 border-indigo-500/20'}`}>
-                  <h4 className="font-bold">{editingException ? 'Editar cambio temporal' : 'Nuevo cambio temporal'}</h4>
+                  <h4 className="font-bold">{editingException ? 'Editar cambio temporal' : 'Nuevo cambio temporal'}</h4>{exceptionError && <p role="alert" className="ux-error">{exceptionError}</p>}
                   <label className="block text-xs font-semibold">Tipo de cambio<select name="type" value={exceptionType} onChange={(event) => setExceptionType(event.target.value)} className={`mt-1 w-full rounded-xl px-3 py-3 text-sm border ${inputBg}`}>
                     {Object.keys(SCHEDULE_EXCEPTION_TYPES).map((type) => <option key={type} value={type}>{EXCEPTION_LABELS[type]}</option>)}
                   </select></label>
@@ -1465,7 +1463,7 @@ function SessionApp({ user, hasAdminClaim }) {
                     <label className="text-xs font-semibold">Franco (días)<input name="restDays" type="number" min="1" max="365" defaultValue={editingException?.restDays || 7} className={`mt-1 w-full rounded-xl px-3 py-3 border ${inputBg}`} required/></label>
                   </div><label className="block text-xs font-semibold">Primera subida del roster especial<input name="cycleStartDate" type="date" defaultValue={editingException?.cycleStartDate || today} className={`mt-1 w-full rounded-xl px-3 py-3 text-sm border ${inputBg}`} required/></label></div>}
                   <p className={`text-xs ${textMuted}`}>El día siguiente a “Hasta” se retoma el ciclo original. Tus compañeros verán tu disponibilidad sin el motivo privado.</p>
-                  <button disabled={exceptionBusy} className="w-full rounded-xl bg-indigo-500 py-3 text-sm font-bold text-white disabled:opacity-50">{exceptionBusy ? 'Guardando…' : editingException ? 'Guardar cambios' : 'Aplicar cambio temporal'}</button>
+                  <button disabled={exceptionBusy} className="ux-button ux-primary w-full">{exceptionBusy ? 'Guardando…' : editingException ? 'Guardar cambios' : 'Aplicar cambio temporal'}</button>
                 </form>
               )}
 
@@ -1511,17 +1509,17 @@ function SessionApp({ user, hasAdminClaim }) {
                <div className={`rounded-2xl border p-4 ${cardClasses[theme]} flex flex-col justify-center items-center text-center text-indigo-400`}>
                  {getTransportIcon(userProfile.transport)}
                  <span className={`text-sm font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>{nextTransition.error ? 'Sin fecha calculada' : `En ${nextTransition.daysUntil} días`}</span>
-                 <span className={`text-[10px] uppercase font-bold mt-1`}>{userProfile.transport || 'Transporte'}</span><span className={`mt-1 text-[9px] ${textMuted}`}>Según tu roster. Confirma el traslado con tu empresa.</span>
+                 <span className={`text-[10px] uppercase font-bold mt-1`}>{userProfile.transport || 'Transporte'}</span><span className={`mt-1 text-[9px] ${textMuted}`}>Según tu roster. Confirmá el traslado con tu empresa.</span>
                </div>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <div className="flex flex-col mb-4">
-                <div className="flex items-center"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de Relevo</h3></div>
-                <p className={`text-[10px] mt-1 ${textMuted}`}>Anota pendientes, herramientas o novedades para tu relevo.</p>
+                <div className="flex items-center"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de relevo</h3></div>
+                <p className={`text-[10px] mt-1 ${textMuted}`}>Anotá pendientes, herramientas o novedades para tu relevo.</p>
               </div>
               <form onSubmit={(e) => addGenericDoc(e, 'logs', { content: e.target.elements.log.value, resolved: false })} className="mb-4">
-                <div className="flex space-x-2"><input name="log" type="text" placeholder="Ej. Dejar orden firmada..." className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><button type="submit" className="bg-indigo-500 text-white p-2 rounded-xl"><Plus size={20}/></button></div>
+                <div className="flex space-x-2"><input name="log" aria-label="Nueva nota de relevo" type="text" placeholder="Ej. Dejar orden firmada..." className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><button type="submit" aria-label="Guardar nota de relevo" className="ux-button ux-primary min-w-11"><Plus size={20}/></button></div>
               </form>
               <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
                 {logs.map(log => (
@@ -1584,12 +1582,12 @@ function SessionApp({ user, hasAdminClaim }) {
               ) : (
                 <div className={`rounded-xl p-4 text-center ${theme === 'light' ? 'bg-slate-50' : 'bg-slate-800/50'}`}>
                   <p className="text-sm font-bold">Todavía no hay coincidencias calculables</p>
-                  <p className={`text-[10px] mt-1 ${textMuted}`}>{displayFriends.length ? 'Revisa que los diagramas estén disponibles.' : 'Invita a un compañero para comparar automáticamente.'}</p>
+                  <p className={`text-[10px] mt-1 ${textMuted}`}>{displayFriends.length ? 'Revisá que los diagramas estén disponibles.' : 'Invita a un compañero para comparar automáticamente.'}</p>
                 </div>
               )}
             </div>
 
-            <button onClick={shareMyCode} disabled={syncState !== 'ready'} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm disabled:opacity-50 ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
+            <button aria-label="Compartir mi código" onClick={shareMyCode} disabled={syncState !== 'ready'} className={`w-full p-4 rounded-2xl border flex items-center justify-center space-x-2 transition-all active:scale-95 shadow-sm disabled:opacity-50 ${theme==='light'?'bg-blue-50 border-blue-200 text-blue-600':'bg-blue-500/10 border-blue-500/30 text-blue-400'}`}>
                <Smartphone size={18} />
                <span className="font-bold text-sm">{syncState === 'loading' ? 'Preparando código seguro…' : 'Enviar mi código a un contacto'}</span>
             </button>
@@ -1598,11 +1596,11 @@ function SessionApp({ user, hasAdminClaim }) {
               <div className={`rounded-2xl border p-4 ${cardClasses[theme]}`}>
                 <div className="flex items-center justify-between gap-3 mb-3"><div><h3 className="font-bold">Mi equipo</h3><p className={`text-[10px] ${textMuted}`}>{displayFriends.length} {displayFriends.length === 1 ? 'compañero' : 'compañeros'} en tu lista</p></div><Filter size={17} className="text-blue-500"/></div>
                 {displayFriends.length > 6 && <div className="relative mb-3"><Search size={15} className={`absolute left-3 top-2.5 ${textMuted}`}/><input value={crewSearch} onChange={(event) => setCrewSearch(event.target.value)} placeholder="Buscar compañero…" className={`w-full rounded-xl pl-9 pr-3 py-2 text-sm outline-none border ${inputBg}`}/></div>}
-                <p className="mb-3 text-xs opacity-75">Carga manual: solo tú la mantienes. Vinculación: recibe el roster compartido por tu compañero.</p>{displayFriends.length === 0 && <p className="py-3 text-sm">Tu equipo está vacío. Abre “Añadir compañero” para empezar.</p>}<div className="space-y-2 max-h-[26rem] overflow-y-auto pr-1">
+                <details className="mb-3 text-sm"><summary className="min-h-11 cursor-pointer py-2 font-semibold">Qué significa cada estado</summary><p>Carga manual: vos mantenés el diagrama. Vinculado: recibe la disponibilidad que comparte tu compañero. Si los datos no están disponibles, no damos la copia por actualizada.</p></details>{displayFriends.length === 0 && <p className="py-3 text-sm">Tu equipo está vacío. Abre “Añadir compañero” para empezar.</p>}<div className="space-y-2 max-h-[26rem] overflow-y-auto pr-1">
                 {visibleFriends.map(friend => (
                   <div key={friend.id} className={`flex justify-between items-center p-3 rounded-xl border ${cardClasses[theme]}`}>
-                    <div className="min-w-0"><p className="font-bold text-sm flex items-center break-words">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`text-xs ${friend.syncAvailable === false ? 'text-amber-500' : textMuted}`}>{friend.syncAvailable === false ? 'Esperando datos compartidos' : `Esquema: ${friend.workDays}x${friend.restDays}`}</p><p className="mt-1 text-xs opacity-75">{friend.isSynced ? 'Vinculado' : 'Carga manual'}{friend.sharedUpdatedAt?.seconds ? ` · Última publicación: ${new Date(friend.sharedUpdatedAt.seconds * 1000).toLocaleString('es-AR')}${friend.sharedCached ? ' (copia local; sin comprobación reciente)' : ''}` : ' · sin fecha de actualización confirmada'}</p></div>
-                    <button onClick={() => { setRemoveError(''); setRemoveFriend(friend); }} className="min-h-11 min-w-11 text-slate-500 hover:text-red-400 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
+                    <div className="min-w-0"><p className="font-bold text-sm flex items-center break-words">{friend.name}{friend.isSynced && <Share2 size={12} className={`ml-1.5 ${friend.syncAvailable === false ? 'text-amber-400' : 'text-blue-400'}`}/>}</p><p className={`mt-1 text-sm ${textMuted}`}>{friend.isSynced ? 'Vinculado' : 'Carga manual'} · {friend.workDays} × {friend.restDays}</p>{friend.isSynced && (friend.syncAvailable === false ? <p className="mt-1 text-xs text-amber-500">Datos compartidos no disponibles</p> : friend.sharedUpdatedAt?.seconds ? <p className="mt-1 text-xs opacity-75">Última publicación: {new Date(friend.sharedUpdatedAt.seconds * 1000).toLocaleString('es-AR')}{friend.sharedCached ? ' · copia local' : ''}</p> : <p className="mt-1 text-xs opacity-75">Sin fecha de publicación confirmada</p>)}</div>
+                    <button onClick={() => { setRemoveError(''); setRemoveFriend(friend); }} className="ux-button ux-danger min-w-11 shrink-0 p-2" aria-label={`Eliminar a ${friend.name}`}><Trash2 size={16}/></button>
                   </div>
                 ))}
                 {filteredFriends.length === 0 && <p className={`text-xs text-center py-4 ${textMuted}`}>No encontramos ese compañero.</p>}
@@ -1621,7 +1619,7 @@ function SessionApp({ user, hasAdminClaim }) {
                     <input name="name" type="text" placeholder="Nombre" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                     <div className="grid grid-cols-2 gap-2"><label className="min-w-0 text-xs font-semibold">Trabajo<input name="w" type="number" min="1" max="365" placeholder="Trabajo" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label><label className="min-w-0 text-xs font-semibold">Descanso<input name="r" type="number" min="1" max="365" placeholder="Descanso" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label></div>
                     <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida del compañero</label><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
-                    <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-colors mt-2">Guardar Manualmente</button>
+                    <button type="submit" className="ux-button ux-primary w-full mt-2">Guardar diagrama manual</button>
                   </form>
                 ) : (
                   <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">
@@ -1662,7 +1660,7 @@ function SessionApp({ user, hasAdminClaim }) {
             
             <div className="flex justify-between items-center mb-6">
               <HeaderTitle icon={Settings} title={`Ajustes · ${APP_VERSION}`} colorClass="text-slate-400" theme={theme} />
-              <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar Colega</button>
+              <button onClick={shareApp} className="flex items-center text-xs font-bold bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-1.5 rounded-lg shadow-lg shadow-indigo-500/30 transition-all active:scale-95"><Send size={14} className="mr-1.5"/> Invitar colega</button>
             </div>
 
             <section className={`rounded-2xl border p-5 ${cardClasses[theme]}`} aria-label="Ayuda y cómo usar RosterMax"><h2 className="font-bold">Ayuda y cómo usar RosterMax</h2><div className="mt-3 flex flex-wrap gap-3"><button onClick={() => setWelcomeRequest((n) => n + 1)} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Conocé RosterMax</button><button onClick={() => openHelp()} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Preguntas frecuentes</button><button onClick={() => helpNavigate('feedback')} className="min-h-11 rounded-xl border px-3 text-sm font-semibold">Reportar un problema</button></div></section>
@@ -1673,8 +1671,8 @@ function SessionApp({ user, hasAdminClaim }) {
               <div className={`rounded-2xl border p-5 ${theme === 'light' ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-500/10 border-emerald-500/30'} flex flex-col shadow-sm`}>
                  <div className="flex items-center justify-between">
                    <div>
-                     <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta Blindada</p>
-                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Datos seguros en la nube de Google.</p>
+                     <p className="font-bold text-emerald-500 text-sm flex items-center"><ShieldAlert size={16} className="mr-1.5"/> Cuenta guardada con Google</p>
+                     <p className={`text-[10px] mt-0.5 ${textMuted}`}>Podés recuperar esta cuenta con el mismo Google. La sincronización se informa por separado.</p>
                    </div>
                    <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
                      <CheckCircle2 size={16} className="text-emerald-500"/>
@@ -1692,7 +1690,7 @@ function SessionApp({ user, hasAdminClaim }) {
             ) : (
               <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-amber-500/30 bg-amber-500/5`}>
                 <h3 className="font-bold flex items-center mb-2"><AlertCircle size={18} className="mr-2 text-amber-500"/> Modo Invitado</h3>
-                <p className={`text-[10px] mb-4 ${textMuted}`}>Guarda esta sesión por primera vez o ingresa a una cuenta que ya utilizaste en otro dispositivo.</p>
+                <p className={`text-[10px] mb-4 ${textMuted}`}>Guardá esta sesión por primera vez o ingresa a una cuenta que ya utilizaste en otro dispositivo.</p>
                 <button onClick={linkNewGoogleAccount} disabled={authBusy} className="w-full flex items-center justify-center bg-white text-slate-900 border border-slate-200 font-bold py-2.5 rounded-xl transition-all shadow-sm active:scale-95 text-sm disabled:opacity-60">
                   <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
                   {authBusy ? 'Conectando…' : 'Guardar con Google'}
@@ -1704,42 +1702,42 @@ function SessionApp({ user, hasAdminClaim }) {
 
             <div className={`rounded-2xl border p-4 flex items-center justify-between ${cardClasses[theme]}`}>
                <div>
-                 <p className="text-xs font-bold uppercase tracking-wider text-blue-500">Tu Código RosterMax</p>
-                 <p className="font-mono text-lg tracking-widest mt-1">{!sharingEnabled && syncState !== 'loading' ? 'Compartición desactivada' : syncState === 'loading' ? 'Preparando…' : syncCode || 'No disponible'}</p>
-                 {syncState === 'error' && <p className="text-[9px] text-red-400 mt-1">Revisa la conexión o los permisos.</p>}
+                 <p className="text-xs font-bold uppercase tracking-wider text-blue-500">Tu código RosterMax</p>
+                 <p className="font-mono text-lg tracking-widest mt-1">{!sharingEnabled && syncState !== 'loading' ? 'No estás compartiendo' : syncState === 'loading' ? 'Preparando…' : syncCode || 'No disponible'}</p>
+                 {syncState === 'error' && <p className="text-[9px] text-red-400 mt-1">Revisá la conexión o los permisos.</p>}
                </div>
                <button onClick={shareMyCode} disabled={syncState !== 'ready'} className={`p-2 rounded-lg border active:scale-90 transition-transform disabled:opacity-40 ${theme==='light'?'bg-slate-50 border-slate-200':'bg-slate-800 border-slate-700'}`}><Share2 size={18} className={textMuted}/></button>
             </div>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 id="section-sharing" className="font-bold scroll-mt-24">Compartir mi roster</h3><p className={`mt-2 text-sm ${textMuted}`}>Quitar un compañero solo lo saca de tu lista. Acá podés desactivar el código para todos. Al reactivar, tenés que enviar el código nuevo; las copias ya vistas pueden permanecer.</p><button type="button" onClick={() => { setSharingError(''); if (sharingEnabled) setSharingConfirm(true); else changeSharing(); }} disabled={sharingBusy || isOffline || syncState === 'loading' || syncState === 'error'} className="mt-3 min-h-11 rounded-xl border border-blue-500 p-3 font-bold disabled:opacity-50">{sharingBusy ? 'Confirmando…' : sharingEnabled ? 'Dejar de compartir con todos' : 'Reactivar con un código nuevo'}</button>
+              <h3 id="section-sharing" className="font-bold scroll-mt-24">Compartir mi roster</h3><p className={`mt-2 text-sm ${textMuted}`}>Quitar un compañero solo lo saca de tu lista. Acá podés desactivar el código para todos. Al reactivar, tenés que enviar el código nuevo; las copias ya vistas pueden permanecer.</p><button type="button" onClick={() => { setSharingError(''); if (sharingEnabled) setSharingConfirm(true); else changeSharing(); }} disabled={sharingBusy || isOffline || syncState === 'loading' || syncState === 'error'} className={`ux-button mt-3 ${sharingEnabled ? 'ux-danger' : 'ux-primary'}`}>{sharingBusy ? 'Confirmando…' : sharingEnabled ? 'Dejar de compartir con todos' : 'Reactivar con un código nuevo'}</button>
               {!sharingConfirm && sharingError && <p role="alert" className="mt-2 text-sm">{sharingError}</p>}<button onClick={() => openHelp('stop-sharing')} className="mt-2 min-h-11 text-sm font-semibold underline">¿Quién puede ver mi roster y cómo dejo de compartir?</button>
             </div>
 
 
             <button type="button" onClick={reopenOnboarding} className={`w-full rounded-2xl border p-4 flex items-center justify-between text-left ${cardClasses[theme]}`}>
-              <div><p className="font-bold text-sm">Volver a ver la guía inicial</p><p className={`text-[10px] mt-0.5 ${textMuted}`}>Reconfigura tu diagrama y nombre paso a paso.</p></div>
+              <div><p className="font-bold text-sm">Volver a ver la guía inicial</p><p className={`text-[10px] mt-0.5 ${textMuted}`}>Reconfigurá tu diagrama y nombre paso a paso.</p></div>
               <ChevronRight size={18} className={textMuted}/>
             </button>
 
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 id="section-feedback" className="font-bold flex items-center scroll-mt-24"><MessageSquare size={18} className="mr-2 text-blue-500"/> Feedback de la beta</h3>
-              <p className={`text-[10px] mt-1 mb-4 ${textMuted}`}>Cuéntanos qué falló o qué función necesitas. No incluyas datos sensibles.</p>
-              <form onSubmit={submitBetaFeedback} className="space-y-3">
-                <select name="category" className={`w-full rounded-xl px-3 py-2 text-sm border outline-none ${inputBg}`} defaultValue="problem">
+              <p className={`text-[10px] mt-1 mb-4 ${textMuted}`}>Contanos qué falló o qué función necesitás. No incluyas datos sensibles.</p>
+              <form onSubmit={submitBetaFeedback} aria-busy={feedbackState.busy}><fieldset disabled={feedbackState.busy} className="space-y-3">{feedbackState.error && <p role="alert" className="ux-error">{feedbackState.error}</p>}{feedbackState.message && <p role="status" className="ux-sync">{feedbackState.message}</p>}
+                <label className="block text-sm font-semibold">Tipo de comentario<select name="category" className={`mt-1 w-full rounded-xl px-3 py-2 text-sm border outline-none ${inputBg}`} defaultValue="problem">
                   <option value="problem">Encontré un problema</option>
                   <option value="idea">Tengo una idea</option>
                   <option value="question">Tengo una duda</option>
-                </select>
-                <textarea name="message" minLength="5" maxLength="800" rows="3" placeholder="Describe brevemente lo que pasó…" className={`w-full rounded-xl px-3 py-2 text-sm border outline-none resize-none ${inputBg}`} required/>
-                <button className="w-full rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-500 py-2.5 text-sm font-bold">Enviar comentario</button>
-              </form>
+                </select></label>
+                <label className="block text-sm font-semibold">Qué pasó o qué necesitás<textarea name="message" minLength="5" maxLength="800" rows="3" placeholder="Describí brevemente lo que pasó…" className={`ux-field mt-1 w-full rounded-xl px-3 py-2 text-sm border outline-none resize-none ${inputBg}`} required/></label>
+                <button className="ux-button ux-primary w-full">{feedbackState.busy ? 'Enviando…' : 'Enviar comentario'}</button>
+              </fieldset></form>
             </div>
 
             <h2 className="text-lg font-bold">Perfil laboral</h2>
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
-              <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos Laborales</h3>
-              <form onSubmit={updateProfile} className="space-y-4">
+              <h3 className="font-bold flex items-center mb-4 text-indigo-400"><BriefcaseBusiness size={18} className="mr-2 text-indigo-500"/> Datos laborales</h3>
+              <form onSubmit={updateProfile} aria-busy={pendingWrites>0 && !isOffline} className="space-y-4">
                 <div>
                   <label className={`block text-xs mb-1 ${textMuted} flex items-center`}><User size={12} className="mr-1"/> Nombre visible para compañeros</label>
                   <input name="displayName" aria-label="Nombre visible del perfil" type="text" placeholder="Ej. Maxi" defaultValue={userProfile.displayName} maxLength={40} className={`w-full rounded-lg px-3 py-2 outline-none border text-sm ${inputBg}`} />
@@ -1787,13 +1785,13 @@ function SessionApp({ user, hasAdminClaim }) {
                     <div><p className="text-[10px] font-bold">Ubicación seleccionada</p><p className="text-[10px]">{userProfile.weatherLocation?.label || 'Sin configurar'}</p></div>
                   </div>
                 </div>
-                <button type="submit" className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2.5 rounded-xl transition-all text-sm mt-2 shadow-lg shadow-indigo-500/20 active:scale-95">Guardar Perfil</button>
+                <button type="submit" className="ux-button ux-primary w-full mt-2">Guardar perfil</button>
               </form>
             </div>
             
             <div className={`rounded-2xl border p-5 ${cardClasses[theme]}`}>
               <h3 id="section-diagram" className="font-bold flex items-center mb-4 scroll-mt-24"><Calendar size={18} className="mr-2 text-emerald-500"/> Configuración de Diagrama</h3>
-              <form onSubmit={updateRoster} className="space-y-4">
+              <form onSubmit={updateRoster} aria-busy={pendingWrites>0 && !isOffline} className="space-y-4">
                 <label className="block text-sm">Tipo de actualización<select name="changeMode" defaultValue={rosterSaved ? 'change' : 'correction'} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}><option value="change">Cambiar permanentemente desde una fecha</option><option value="correction">Corregir la configuración que rige en esa fecha</option></select></label>
                 <label className="block text-sm">Fecha de vigencia o configuración a corregir<input name="effectiveDate" type="date" required defaultValue={today} className={`mt-1 w-full rounded-xl border p-3 ${inputBg}`}/></label>
                 <p className={`text-xs ${textMuted}`}>Un cambio conserva los días anteriores. Una corrección modifica el período elegido, incluido su pasado. No modifica compensatorios.</p>
@@ -1802,7 +1800,7 @@ function SessionApp({ user, hasAdminClaim }) {
                   <div><label className={`block text-xs mb-1 ${textMuted}`}>Días Descanso</label><input name="restDays" aria-label="Días Descanso" type="number" min="1" max="365" required defaultValue={rosterConfig.restDays} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} /></div>
                 </div>
                 <div><label className={`block text-xs mb-1 ${textMuted}`}>Inicio conocido de un ciclo de trabajo</label><input name="startDate" aria-label="Inicio conocido de un ciclo de trabajo" type="date" required defaultValue={rosterConfig.startDate} className={`w-full rounded-lg px-3 py-2 outline-none border ${inputBg}`} style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /><p className={`text-[9px] mt-1 ${textMuted}`}>Puede ser una subida pasada o futura; calcularemos todo el calendario en ambos sentidos.</p></div>
-                <button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/30 transition-all active:scale-95">Actualizar Diagrama</button>
+                <button type="submit" className="ux-button ux-primary w-full">Actualizar diagrama</button>
               </form>
               {(rosterConfig.periods || []).length > 0 && <details className="mt-3 text-sm"><summary>Historial de vigencias</summary><p>Base: {rosterConfig.workDays} × {rosterConfig.restDays}, ciclo {rosterConfig.startDate}</p>{rosterConfig.periods.map((p) => <p key={p.effectiveDate}>Desde {p.effectiveDate}: {p.workDays} × {p.restDays}, ciclo {p.startDate}</p>)}</details>}
             </div>
@@ -1814,7 +1812,7 @@ function SessionApp({ user, hasAdminClaim }) {
                   <div className={`h-10 w-10 rounded-xl flex items-center justify-center flex-shrink-0 ${reminderSettings.enabled ? 'bg-emerald-500/15 text-emerald-500' : theme === 'light' ? 'bg-slate-100 text-slate-500' : 'bg-slate-800 text-slate-400'}`}>
                     {reminderSettings.enabled ? <BellRing size={19}/> : <Bell size={19}/>}
                   </div>
-                  <div><h3 className="font-bold text-sm">Alertas de subida y bajada</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Te avisamos al abrir RosterMax cuando se acerca un cambio. Las alertas con la app cerrada llegarán en una fase Push posterior.</p></div>
+                  <div><h3 className="font-bold text-sm">Alertas de subida y bajada</h3><p className={`text-[10px] mt-1 leading-relaxed ${textMuted}`}>Te avisamos al abrir RosterMax cuando se acerca un cambio. No hay notificaciones Push con la app cerrada; los avisos exportados dependen del calendario del teléfono.</p></div>
                 </div>
               </div>
               <div className="grid grid-cols-[1fr_auto] gap-3 mt-4">
@@ -1827,7 +1825,7 @@ function SessionApp({ user, hasAdminClaim }) {
                 {reminderSettings.enabled ? (
                   <button type="button" onClick={disableTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold border border-red-500/30 text-red-400">Desactivar</button>
                 ) : (
-                  <button type="button" onClick={requestTurnReminders} className="rounded-xl px-3 py-2 text-xs font-bold bg-emerald-500 text-white">Activar</button>
+                  <button type="button" onClick={requestTurnReminders} className="ux-button ux-primary">Activar</button>
                 )}
               </div>
             </div>
@@ -1856,21 +1854,19 @@ function SessionApp({ user, hasAdminClaim }) {
           <div className="space-y-6 animate-in zoom-in-95 duration-300">
             <div className="mb-6"><HeaderTitle icon={ShieldAlert} title="Centro de Mando" colorClass="text-amber-500" theme={theme} /></div>
 
-            <div className={`rounded-2xl border p-5 ${cardClasses[theme]} border-l-4 border-l-emerald-500`}>
-              <p className="font-bold text-emerald-500 flex items-center"><ShieldAlert size={18} className="mr-2"/> Propietario verificado</p>
-              <p className={`text-xs mt-2 ${textMuted}`}>El acceso se valida mediante un registro privado en Firestore. Ningún usuario puede darse permisos desde la aplicación.</p>
-              <div className="grid grid-cols-2 gap-3 mt-4">
-                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[10px] ${textMuted}`}>Campañas activas</p><p className="text-2xl font-black text-amber-500">{adsRead.updatedAt ? activeAdCount : '—'}</p><p className="mt-2 text-xs opacity-75">Fuente: ads · activas y vigentes hoy · cobertura: todas las campañas, sin filtros · última lectura: {adsRead.updatedAt?.toLocaleString('es-AR') || '—'} · {adsRead.state === 'ready' ? 'confirmada' : adsRead.state === 'error' ? 'error; conservamos último resultado' : 'sin actualización confirmada'}.</p></div>
-              </div>
-            </div>
+            <div className={`rounded-2xl border p-3 ${cardClasses[theme]}`}><p className="font-bold text-emerald-500 flex items-center gap-2"><ShieldAlert size={18}/>Propietario verificado</p><details><summary className="min-h-11 py-2 text-sm cursor-pointer">Cómo se protege este panel</summary><p className="text-sm">El acceso depende del registro administrativo protegido o del permiso firmado existente, no del correo escrito en la interfaz. Una revocación explícita prevalece. Un usuario normal no puede darse permisos.</p></details></div>
 
             <CeoAudiencePanel theme={theme} census={census} censusState={censusState} activityState={activityState} audience={audienceSummary} refreshing={censusRefreshing} refreshError={censusError} onRefresh={refreshAccountCensus} today={today} activityUpdatedAt={activityUpdatedAt} activityDocs={activityMetrics} ownerUid={user.uid}/>
 
             <CeoOperationsPanel user={user} theme={theme}/>
 
+              <div className="grid grid-cols-1 gap-3 mt-4">
+                <div className={`rounded-xl p-3 ${theme === 'light' ? 'bg-amber-50' : 'bg-amber-500/10'}`}><p className={`text-[10px] ${textMuted}`}>Campañas activas</p><p className="text-2xl font-black text-amber-500">{adsRead.updatedAt ? activeAdCount : '—'}</p><p className="mt-2 text-xs opacity-75">Fuente: ads · activas y vigentes hoy · cobertura: todas las campañas, sin filtros · última lectura: {adsRead.updatedAt?.toLocaleString('es-AR') || '—'} · {adsRead.state === 'ready' ? 'confirmada' : adsRead.state === 'error' ? 'error; conservamos último resultado' : 'sin actualización confirmada'}.</p></div>
+              </div>
+
             <details className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5"><summary className="min-h-11 cursor-pointer py-2 font-bold text-amber-500">Nueva campaña patrocinada</summary>
               <h3 className="font-bold flex items-center mb-1 text-amber-500"><Megaphone size={18} className="mr-2"/> Nueva campaña patrocinada</h3>
-              <p className={`text-[10px] mb-4 ${textMuted}`}>Para la beta, tú cargas y pausas cada campaña. La segmentación se evalúa en el dispositivo y no entrega datos del trabajador al anunciante.</p>
+              <p className={`text-[10px] mb-4 ${textMuted}`}>Para la beta, vos cargás y pausás cada campaña. La segmentación se evalúa en el dispositivo y no entrega datos del trabajador al anunciante.</p>
               <form onSubmit={launchAd} className="space-y-3">
                 <input name="adCompany" aria-label="Empresa anunciante" type="text" maxLength="80" placeholder="Empresa (Ej. Hilux Service)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
                 <input name="adTitle" aria-label="Título de la oferta" type="text" maxLength="120" placeholder="Oferta (Ej. 20% en mantenimiento)" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
@@ -1910,22 +1906,7 @@ function SessionApp({ user, hasAdminClaim }) {
 
       </Suspense></SectionBoundary></main>
 
-      <nav className={`fixed bottom-0 w-full border-t pb-safe z-40 ${theme === 'light' ? 'bg-white/90 border-slate-200' : 'bg-slate-950/90 border-slate-800'}`}>
-        <div className="max-w-md mx-auto px-2 py-3 flex justify-between items-center">
-          <button onClick={() => setActiveTab('roster')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'roster' ? 'text-emerald-500' : textMuted}`}><Calendar size={20} /><span className="text-[9px] font-bold">Roster</span></button>
-          <button onClick={() => setActiveTab('crew')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'crew' ? 'text-blue-500' : textMuted}`}><Users size={20} /><span className="text-[9px] font-bold">Equipo</span></button>
-          <button onClick={() => { setPlannedDate(''); setActiveTab('planner'); }} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'planner' ? 'text-emerald-500' : textMuted}`}><CheckSquare size={20} /><span className="text-[9px] font-bold">Franco</span></button>
-          <button onClick={() => setActiveTab('wealth')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'wealth' ? 'text-emerald-500' : textMuted}`}><TrendingUp size={20} /><span className="text-[9px] font-bold">Finanzas</span></button>
-          <button aria-label="Ajustes" onClick={() => setActiveTab('settings')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'settings' ? 'text-emerald-500' : textMuted}`}><Settings size={20} /><span className="text-[9px] font-bold">Ajustes</span></button>
-          
-          {isAdmin && (
-            <button onClick={() => setActiveTab('admin')} className={`flex-1 flex flex-col items-center space-y-1 transition-colors ${activeTab === 'admin' ? 'text-amber-500' : textMuted}`}>
-              <ShieldAlert size={20} className={activeTab === 'admin' ? 'fill-amber-500/20' : ''}/>
-              <span className="text-[9px] font-bold">CEO</span>
-            </button>
-          )}
-        </div>
-      </nav>
+      <BottomNav activeTab={activeTab} isAdmin={isAdmin} theme={theme} onNavigate={(tab) => { if(tab===activeTab) return; navigationGuard.request(()=>{ if(tab==='planner')setPlannedDate(''); setActiveTab(tab); window.scrollTo({top:0}); }); }}/>
 
     </div>
   );

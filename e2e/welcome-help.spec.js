@@ -33,9 +33,9 @@ async function configure(page) {
   return uid(page);
 }
 async function screenshot(page, name) {
-  await mkdir('audit/welcome', { recursive: true });
+  await mkdir('audit/ux-polish/welcome-regression', { recursive: true });
   if (await page.getByRole('dialog').count()) await page.getByRole('dialog').evaluate((node) => { node.scrollTop = 0; const body = node.querySelector('[data-dialog-body]'); if (body) body.scrollTop = 0; });
-  await page.screenshot({ path: `audit/welcome/${name}.png`, animations: 'disabled' });
+  await page.screenshot({ path: `audit/ux-polish/welcome-regression/${name}.png`, animations: 'disabled' });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
 }
 

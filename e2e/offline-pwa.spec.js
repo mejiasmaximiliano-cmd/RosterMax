@@ -55,16 +55,16 @@ test('compensatorios: recarga PWA realmente offline, conserva pendientes y sincr
     await page.getByRole('button',{name:'Guardar movimiento'}).click();
     await expect(page.getByRole('dialog').getByRole('article')).toContainText('3 días pendientes');
     await page.reload();
-    await expect(page.getByRole('region',{name:'Mis compensatorios'})).toContainText('pendiente de confirmación');
-    await expect(page.getByText('No confirmado por el servidor.', { exact:false })).toBeVisible();
+    await expect(page.getByRole('region',{name:'Mis compensatorios'})).toContainText('Pendiente de sincronizar');
+    await expect(page.getByRole('main').getByRole('status').first()).toContainText('Pendiente de sincronizar');
     expect(await entries()).toEqual(before);
     await context.setOffline(false);
     await expect.poll(async () => (await entries()).length, { timeout:35000 }).toBe(before.length + 1);
     await page.getByRole('button',{name:'Ver historial y registrar'}).click();
-    await expect(page.getByRole('dialog').getByRole('article')).toContainText('Confirmado por servidor');
+    await expect(page.getByRole('dialog').getByRole('article')).toContainText('Sincronizado');
     await page.reload();
-    await expect(page.getByRole('region',{name:'Mis compensatorios'})).not.toContainText('pendiente de confirmación');
-    await expect(page.getByText('Datos privados confirmados por el servidor', { exact:true })).toBeVisible();
+    await expect(page.getByRole('region',{name:'Mis compensatorios'})).not.toContainText('Pendiente de sincronizar');
+    await expect(page.getByText('Sincronizado', { exact:true })).toBeVisible();
     expect((await entries()).length).toBe(before.length + 1);
     expect(errors).toEqual([]);
   } finally { await context.setOffline(false); await page.goto('about:blank'); await new Promise((done) => server.close(done)); }

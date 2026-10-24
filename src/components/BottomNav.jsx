@@ -1,0 +1,5 @@
+import { Calendar, Users, CheckSquare, TrendingUp, Settings, ShieldAlert } from 'lucide-react';
+const tabs = [['roster','Roster',Calendar],['crew','Equipo',Users],['planner','Franco',CheckSquare],['wealth','Finanzas',TrendingUp],['settings','Ajustes',Settings]];
+export default function BottomNav({ activeTab, isAdmin, theme, onNavigate }) {
+  return <nav aria-label="Navegación principal" className={`app-nav fixed bottom-0 w-full border-t z-40 ${theme==='light'?'border-slate-200':'border-slate-800'}`}><div className="max-w-lg mx-auto px-2 py-2 flex gap-1 justify-between items-stretch">{[...tabs,...(isAdmin?[['admin','CEO',ShieldAlert]]:[])].map(([id,label,Icon])=><button key={id} type="button" aria-current={activeTab===id?'page':undefined} onClick={()=>onNavigate(id)} className={`min-w-0 flex-1 flex flex-col items-center justify-center gap-1 ${activeTab===id ? theme==='light'?'text-emerald-700':'text-emerald-300' : theme==='light'?'text-slate-600':'text-slate-300'}`}><Icon size={20} aria-hidden="true"/><span className="text-xs font-semibold">{label}</span></button>)}</div></nav>;
+}

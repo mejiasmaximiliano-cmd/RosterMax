@@ -122,12 +122,12 @@ test('simulador muestra día 10 de 14 trabajando y día 5 de 7 de franco junto a
   await expect(own).toContainText('Día 10 de 14 de trabajo');
   await page.getByText('Añadir compañero', { exact:true }).click();
   await page.getByRole('button', { name: 'Carga Manual', exact: true }).click();
-  const manualForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Guardar Manualmente', exact: true }) });
+  const manualForm = page.locator('form').filter({ has: page.getByRole('button', { name: 'Guardar diagrama manual', exact: true }) });
   await manualForm.getByPlaceholder('Nombre', { exact: true }).fill('Colega 7x7');
   await manualForm.getByPlaceholder('Trabajo', { exact: true }).fill('7');
   await manualForm.getByPlaceholder('Descanso', { exact: true }).fill('7');
   await manualForm.locator('input[name="start"]').fill('2026-09-10');
-  await manualForm.getByRole('button', { name: 'Guardar Manualmente', exact: true }).click();
+  await manualForm.getByRole('button', { name: 'Guardar diagrama manual', exact: true }).click();
   const colleague = simulator.getByRole('article', { name: 'Roster de Colega 7x7' });
   await expect(colleague).toContainText('Día 5 de 7 de trabajo');
   await expect(colleague.getByText('¡COINCIDEN!', { exact: true })).toHaveCount(0);

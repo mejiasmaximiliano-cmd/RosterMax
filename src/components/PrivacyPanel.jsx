@@ -9,9 +9,9 @@ export default function PrivacyPanel({ user, theme }) {
   const controller = String(import.meta.env.VITE_PRIVACY_CONTROLLER || '').trim();
   const run = async (work) => {
     if (busy) return;
-    if (!navigator.onLine) { setMessage('Conéctate para consultar o confirmar cambios en el servidor.'); return; }
+    if (!navigator.onLine) { setMessage('Conectate para consultar o confirmar cambios en el servidor.'); return; }
     setBusy(true); setMessage('');
-    try { await work(); } catch { setMessage('La operación no se completó. No anunciamos una eliminación o exportación completa sin confirmación. Puedes reintentar.'); }
+    try { await work(); } catch { setMessage('La operación no se completó. No anunciamos una eliminación o exportación completa sin confirmación. Podés reintentar.'); }
     finally { setBusy(false); }
   };
   const exportData = () => run(async () => {
@@ -49,7 +49,7 @@ export default function PrivacyPanel({ user, theme }) {
   return <section aria-label="Privacidad y mis datos" className={`rounded-2xl border p-5 space-y-3 ${theme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-700'}`}>
     <h3 className="font-bold">Privacidad y mis datos</h3>
     <p className="text-sm">El roster compartido no incluye motivos de licencia ni notas. Planes, finanzas y compensatorios pertenecen a tu cuenta; el CEO no puede leerlos. El feedback es un envío voluntario al propietario: no incluyas datos sensibles.</p>
-    <p className="text-sm">Hay una copia local para trabajar sin señal. Evita guardar datos sensibles en dispositivos compartidos. Quien tenga tu código y una sesión puede consultar tu disponibilidad; retirar la compartición no borra copias ya vistas.</p>
+    <p className="text-sm">Hay una copia local para trabajar sin señal. Evitá guardar datos sensibles en dispositivos compartidos. Quien tenga tu código y una sesión puede consultar tu disponibilidad; retirar la compartición no borra copias ya vistas.</p>
     <div className="flex flex-wrap gap-3">{[['Exportar mis datos privados', exportData], ['Desactivar y borrar mi medición', eraseMeasurement], ['Solicitar eliminación de mi cuenta', requestErasure]].map(([label, action]) => <button key={label} type="button" disabled={busy} onClick={action} className="min-h-11 rounded-xl border border-blue-500/30 p-3 text-sm font-bold text-blue-500 disabled:opacity-50">{label}</button>)}</div>
     <p className="text-xs opacity-75">La exportación consulta el servidor, no presenta una caché parcial como respaldo completo. El borrado de cuenta es manual. Cerrar sesión o desinstalar no elimina tu cuenta ni exportaciones a Calendar/ICS.</p>
     {/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) && controller ? <p className="text-sm">Responsable informado: {controller}. Contacto: <a className="underline" href={`mailto:${contact}`}>{contact}</a>.</p> : <p className="text-sm text-amber-500">Falta completar responsable, contacto, conservación y política definitiva antes del lanzamiento comercial. Estos controles no son una promesa de cumplimiento legal.</p>}

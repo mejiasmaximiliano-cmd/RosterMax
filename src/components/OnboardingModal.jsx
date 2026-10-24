@@ -88,7 +88,7 @@ export default function OnboardingModal({
 
           {step === 1 && (
             <form onSubmit={submitRoster} className="space-y-4">
-              <div><p className="text-xs font-black uppercase tracking-widest text-emerald-500 mb-2">Paso 1 de 2</p><h2 id="onboarding-title" className="text-2xl font-black">Configura tu diagrama</h2><p className={`text-sm mt-2 ${muted}`}>Indica una fecha conocida en la que comenzaste un ciclo de trabajo.</p></div>
+              <div><p className="text-xs font-black uppercase tracking-widest text-emerald-500 mb-2">Paso 1 de 2</p><h2 id="onboarding-title" className="text-2xl font-black">Configurá tu diagrama</h2><p className={`text-sm mt-2 ${muted}`}>Indica una fecha conocida en la que comenzaste un ciclo de trabajo.</p></div>
               <div className="grid grid-cols-2 gap-3">
                 <label className={`text-xs font-bold ${muted}`}>Días trabajando<input name="workDays" type="number" min="1" max="365" required defaultValue={rosterConfig.workDays} className={`mt-1.5 w-full rounded-xl border p-3 text-base outline-none ${input}`}/></label>
                 <label className={`text-xs font-bold ${muted}`}>Días de franco<input name="restDays" type="number" min="1" max="365" required defaultValue={rosterConfig.restDays} className={`mt-1.5 w-full rounded-xl border p-3 text-base outline-none ${input}`}/></label>

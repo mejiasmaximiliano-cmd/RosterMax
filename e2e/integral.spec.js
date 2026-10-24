@@ -38,9 +38,9 @@ async function dates(page) {
   });
 }
 async function screenshot(page, name) {
-  await mkdir('audit/welcome/regression', { recursive:true });
+  await mkdir('audit/ux-polish/regression', { recursive:true });
   if (name.startsWith('compensatorios')) await page.getByRole('dialog').evaluate((dialog) => { dialog.scrollTop = 0; });
-  await page.screenshot({ path:`audit/welcome/regression/${name}.png`, fullPage:!name.startsWith('compensatorios') });
+  await page.screenshot({ path:`audit/ux-polish/regression/${name}.png`, fullPage:!name.startsWith('compensatorios') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
 }
 

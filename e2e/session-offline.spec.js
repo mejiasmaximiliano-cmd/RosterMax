@@ -69,7 +69,7 @@ async function finishOnboarding(page, name, navigate = true) {
 async function addPlan(page, title) {
   await page.getByRole('navigation').getByRole('button', { name: 'Franco', exact: true }).click();
   await page.getByRole('button', { name: 'Nuevo plan', exact: true }).click();
-  await page.getByLabel('¿Qué quieres hacer?').fill(title);
+  await page.getByLabel('¿Qué querés hacer?').fill(title);
   await page.getByLabel('Fecha del plan').fill('2026-09-21');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
   await expect(page.getByRole('button', { name: `Editar: ${title}`, exact: true })).toBeVisible();
@@ -105,7 +105,7 @@ test('cambiar UID limpia perfil, planes y finanzas sin borrar la cuenta anterior
   await finishOnboarding(page, 'Cuenta B privada', false);
   await page.getByRole('navigation').getByRole('button', { name: 'Franco', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Plan exclusivo de cuenta A', exact: true })).toHaveCount(0);
-  await expect(page.getByText('No hay planes en esta vista.', { exact: true })).toBeVisible();
+  await expect(page.getByText('No hay planes próximos pendientes. Usá Nuevo plan para organizar una fecha.', { exact: true })).toBeVisible();
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
   await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await expect(page.getByLabel('Ingreso previsto (ARS)')).toHaveValue('0');
@@ -128,7 +128,7 @@ test('guarda planes y gastos sin red y los sincroniza al reconectar, conservánd
   await context.setOffline(true);
   await expect(page.getByText('Modo Sin Conexión', { exact: true })).toBeVisible();
   await addPlan(page, 'Llamar a casa al recuperar señal');
-  await expect(page.getByText('Cambios pendientes de sincronización', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByRole('status').first()).toContainText('Pendiente de sincronizar');
   await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
   await page.getByText('Editar presupuesto mensual', { exact: true }).click();
   await page.getByLabel('Monto (ARS)', { exact: true }).fill('4500');
@@ -165,7 +165,7 @@ test('una cuenta nueva no publica ni guarda el roster predeterminado antes de co
   await expect(dialog).toBeVisible();
   const uid = await userId(page);
   await dialog.getByRole('button', { name: 'Omitir presentación', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Configura tu primer roster', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Configurá tu primer roster', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Calendario de roster' })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: 'Ajustes', exact: true }).click();
   await expect.poll(async () => (await readDocument(request, `users/${uid}/settings/sync`)).status()).toBe(200);
@@ -175,6 +175,6 @@ test('una cuenta nueva no publica ni guarda el roster predeterminado antes de co
   expect((await readDocument(request, `users/${uid}/settings/roster`)).status()).toBe(404);
   expect((await readDocument(request, `public/data/sync_codes/${code}`)).status()).toBe(404);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Configura tu primer roster', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Configurá tu primer roster', exact: true })).toBeVisible();
   expect((await readDocument(request, `public/data/sync_codes/${code}`)).status()).toBe(404);
 });

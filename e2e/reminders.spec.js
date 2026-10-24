@@ -62,7 +62,7 @@ test('el plan descarga una alarma futura privada y renovar su fecha actualiza el
   await finishOnboarding(page);
   await page.getByRole('navigation').getByRole('button', { name: 'Franco', exact: true }).click();
   await page.getByRole('button', { name: 'Nuevo plan', exact: true }).click();
-  await page.getByLabel('¿Qué quieres hacer?').fill(title);
+  await page.getByLabel('¿Qué querés hacer?').fill(title);
   await page.getByLabel('Fecha del plan').fill('2026-10-03');
   await page.getByLabel('Duración estimada (minutos)').fill('90');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
@@ -79,7 +79,7 @@ test('el plan descarga una alarma futura privada y renovar su fecha actualiza el
   await editor.getByLabel('Fecha del recordatorio', { exact: true }).fill(TODAY);
   await editor.getByLabel('Hora local del calendario').fill('11:00');
   await editor.getByRole('button', { name: 'Descargar recordatorio (.ics)', exact: true }).click();
-  await expect(editor.getByRole('alert')).toContainText('Elige una fecha y hora futuras');
+  await expect(editor.getByRole('alert')).toContainText('Elegí una fecha y hora futuras');
   expect(downloadCount).toBe(0);
 
   await editor.getByLabel('Fecha del recordatorio', { exact: true }).fill('2026-10-03');

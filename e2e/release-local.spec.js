@@ -19,7 +19,7 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
   await localOnly(context); await page.setViewportSize({ width: 390, height: 844 });
   const errors = []; page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/'); await page.getByRole('button', { name: 'Omitir presentación' }).click();
-  await mkdir('audit/welcome/regression', { recursive: true });
+  await mkdir('audit/ux-polish/regression', { recursive: true });
   for (const [theme, label] of [['light', 'Claro'], ['dark', 'Oscuro']]) {
     await page.getByRole('navigation').getByRole('button', { name: 'Ajustes', exact: true }).click();
     await page.getByRole('button', { name: label, exact: true }).click();
@@ -33,6 +33,7 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
     expect((await rest.boundingBox()).width).toBeLessThan(190);
     expect((await rest.boundingBox()).x + (await rest.boundingBox()).width).toBeLessThanOrEqual(390);
     await page.getByRole('navigation').getByRole('button', { name: 'Roster', exact: true }).click();
+    await page.getByRole('dialog',{name:'¿Descartar cambios sin guardar?',exact:true}).getByRole('button',{name:'Descartar edición',exact:true}).click();
     await page.getByRole('button', { name: 'Ver historial y registrar' }).click();
     await page.getByRole('button', { name: 'Registrar días pendientes' }).click();
     await page.setViewportSize({ width: 390, height: 420 });
@@ -40,8 +41,10 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
     await page.getByRole('button', { name: 'Guardar movimiento' }).scrollIntoViewIfNeeded();
     const bounds = await page.getByRole('button', { name: 'Guardar movimiento' }).boundingBox();
     expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(420);
-    await page.screenshot({ path: `audit/welcome/regression/dialogo-teclado-${theme}-390.png` });
-    await page.keyboard.press('Escape'); await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: `audit/ux-polish/regression/dialogo-teclado-${theme}-390.png` });
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog',{name:'¿Descartar cambios sin guardar?',exact:true}).getByRole('button',{name:'Descartar edición',exact:true}).click();
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('navigation').getByRole('button', { name: 'Finanzas', exact: true }).click();
     await page.getByText('Editar presupuesto mensual', { exact: true }).click();
     await page.getByLabel('Ingreso previsto (ARS)').fill('1000000000000');
@@ -49,10 +52,10 @@ test('móvil claro/oscuro, altura reducida equivalente al teclado, acciones y ci
     await expect(page.getByText(/Presupuesto de .* guardado en ARS/)).toBeVisible();
     await expect(page.getByText('Disponible estimado', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    await page.screenshot({ path: `audit/welcome/regression/finanzas-${theme}-390.png`, fullPage: true });
+    await page.screenshot({ path: `audit/ux-polish/regression/finanzas-${theme}-390.png`, fullPage: true });
     // Check fixed navigation on a real viewport screenshot, not a full-page stitching artifact.
     const nav = await page.getByRole('navigation').boundingBox(); expect(nav.y + nav.height).toBeLessThanOrEqual(844);
-    await page.screenshot({ path: `audit/welcome/regression/navegacion-${theme}-390.png` });
+    await page.screenshot({ path: `audit/ux-polish/regression/navegacion-${theme}-390.png` });
   }
   expect(errors).toEqual([]);
 });
@@ -88,7 +91,7 @@ test('medición de carga inicial compilada local, tres contextos fríos; recurso
       }
       await context.close();
     }
-    await mkdir('audit/welcome/regression', { recursive: true });
-    await writeFile('audit/welcome/regression/initial-load-local.json', JSON.stringify({ environment: 'LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV', runs }, null, 2));
+    await mkdir('audit/ux-polish/regression', { recursive: true });
+    await writeFile('audit/ux-polish/regression/initial-load-local.json', JSON.stringify({ environment: 'LOCAL EMULATOR; synthetic accounts; Chrome; loopback; no throttling; service worker disabled for initial-load isolation; not phone speed or production CWV', runs }, null, 2));
   } finally { await new Promise((done) => server.close(done)); }
 });

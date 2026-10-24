@@ -71,12 +71,12 @@ test('onboarding, calendario, crear y editar un plan con persistencia', async ({
   await calendar.getByRole('button', { name: /^lunes,? 21 de septiembre: Franco/ }).click();
   await calendar.getByRole('button', { name: 'Planificar', exact: true }).click();
   await expect(page.getByLabel('Fecha del plan')).toHaveValue('2026-09-21');
-  await page.getByLabel('¿Qué quieres hacer?').fill('Salida con mi familia');
+  await page.getByLabel('¿Qué querés hacer?').fill('Salida con mi familia');
   await page.getByLabel('Duración estimada (minutos)').fill('90');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Salida con mi familia' })).toBeVisible();
   await page.getByRole('button', { name: 'Editar: Salida con mi familia' }).click();
-  await page.getByLabel('¿Qué quieres hacer?').fill('Salida familiar al parque');
+  await page.getByLabel('¿Qué querés hacer?').fill('Salida familiar al parque');
   await page.getByLabel('Fecha del plan').fill('2026-09-22');
   await page.getByRole('button', { name: 'Guardar cambios', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Salida familiar al parque' })).toBeVisible();
@@ -104,7 +104,7 @@ test('licencia médica modifica disponibilidad, permite una cita y vuelve al ros
   await expect(calendar.getByText('Este día es de recuperación;', { exact: false })).toBeVisible();
   await calendar.getByRole('button', { name: 'Planificar', exact: true }).click();
   await expect(page.getByText('Este día no se cuenta como franco.', { exact: false })).toBeVisible();
-  await page.getByLabel('¿Qué quieres hacer?').fill('Turno de seguimiento');
+  await page.getByLabel('¿Qué querés hacer?').fill('Turno de seguimiento');
   await page.getByRole('combobox', { name: 'Categoría', exact: true }).selectOption('health');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Editar: Turno de seguimiento' })).toBeVisible();
