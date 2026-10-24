@@ -222,6 +222,8 @@ function SessionApp({ user, hasAdminClaim }) {
   const [confirmed, setConfirmed] = useState({});
   const sharedReady = confirmed.roster && confirmed.profile && confirmed.exceptions;
   const feedbackBusy = useRef(false);
+  const genericBusy = useRef(new Set());
+  const [genericSaving,setGenericSaving] = useState({});
   const [feedbackState,setFeedbackState] = useState({busy:false,error:'',message:''});
   const [exceptionError,setExceptionError] = useState('');
   const [dataError, setDataError] = useState('');
@@ -1114,9 +1116,13 @@ function SessionApp({ user, hasAdminClaim }) {
 
   const addGenericDoc = async (event, collectionName, fields) => {
     event.preventDefault();
-    const formElement = event.currentTarget;
-    const saved = await savePrivate(addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() }), 'Registro guardado.');
-    if (saved) formElement.reset();
+    if (genericBusy.current.has(collectionName)) return;
+    const formElement = event.currentTarget, submitted = readForm(formElement);
+    genericBusy.current.add(collectionName); setGenericSaving(current=>({...current,[collectionName]:true}));
+    try {
+      const saved = await savePrivate(addDoc(collection(db, 'artifacts', APP_ID, 'users', user.uid, collectionName), { ...fields, createdAt: serverTimestamp() }), 'Registro guardado.');
+      if (saved && readForm(formElement) === submitted) formElement.reset();
+    } finally { genericBusy.current.delete(collectionName); setGenericSaving(current=>({...current,[collectionName]:false})); }
   };
 
   const toggleLog = async (log) => savePrivate(setDoc(doc(db, 'artifacts', APP_ID, 'users', user.uid, 'logs', log.id), { resolved: !log.resolved }, { merge: true }), 'Registro actualizado.');
@@ -1518,8 +1524,8 @@ function SessionApp({ user, hasAdminClaim }) {
                 <div className="flex items-center"><FileText size={18} className="text-indigo-500 mr-2" /><h3 className="font-bold">Bitácora de relevo</h3></div>
                 <p className={`text-[10px] mt-1 ${textMuted}`}>Anotá pendientes, herramientas o novedades para tu relevo.</p>
               </div>
-              <form onSubmit={(e) => addGenericDoc(e, 'logs', { content: e.target.elements.log.value, resolved: false })} className="mb-4">
-                <div className="flex space-x-2"><input name="log" aria-label="Nueva nota de relevo" type="text" placeholder="Ej. Dejar orden firmada..." className={`flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><button type="submit" aria-label="Guardar nota de relevo" className="ux-button ux-primary min-w-11"><Plus size={20}/></button></div>
+              <form aria-busy={Boolean(genericSaving.logs)} onSubmit={(e) => addGenericDoc(e, 'logs', { content: e.target.elements.log.value, resolved: false })} className="mb-4">
+                <div className="flex space-x-2"><input name="log" aria-label="Nueva nota de relevo" type="text" placeholder="Ej. Dejar orden firmada..." className={`min-w-0 w-full flex-1 rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required/><button type="submit" aria-label="Guardar nota de relevo" disabled={Boolean(genericSaving.logs)} className="ux-button ux-primary min-w-11 shrink-0">{genericSaving.logs ? 'Guardando…' : <Plus size={20}/>} </button></div>
               </form>
               <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
                 {logs.map(log => (
@@ -1615,11 +1621,11 @@ function SessionApp({ user, hasAdminClaim }) {
               </div>
               <div className="p-5">
                 {addMethod === 'manual' ? (
-                  <form onSubmit={(e) => addGenericDoc(e, 'friends', { name: e.target.elements.name.value, workDays: parseInt(e.target.elements.w.value), restDays: parseInt(e.target.elements.r.value), startDate: e.target.elements.start.value, isSynced: false })} className="space-y-3 animate-in fade-in">
-                    <input name="name" type="text" placeholder="Nombre" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required />
+                  <form aria-busy={Boolean(genericSaving.friends)} onSubmit={(e) => addGenericDoc(e, 'friends', { name: e.target.elements.name.value, workDays: parseInt(e.target.elements.w.value), restDays: parseInt(e.target.elements.r.value), startDate: e.target.elements.start.value, isSynced: false })} className="space-y-3 animate-in fade-in">
+                    <label className="block text-xs font-semibold">Nombre del compañero<input name="name" type="text" placeholder="Nombre" className={`mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required /></label>
                     <div className="grid grid-cols-2 gap-2"><label className="min-w-0 text-xs font-semibold">Trabajo<input name="w" type="number" min="1" max="365" placeholder="Trabajo" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label><label className="min-w-0 text-xs font-semibold">Descanso<input name="r" type="number" min="1" max="365" placeholder="Descanso" className={`mt-1 w-full min-w-0 rounded-xl px-3 py-2 text-sm border ${inputBg}`} required /></label></div>
-                    <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida del compañero</label><input name="start" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
-                    <button type="submit" className="ux-button ux-primary w-full mt-2">Guardar diagrama manual</button>
+                    <div><label className={`block text-xs mb-1 ${textMuted}`}>Última subida del compañero</label><input name="start" aria-label="Última subida del compañero" type="date" className={`w-full rounded-xl px-3 py-2 text-sm outline-none border ${inputBg}`} required style={{ colorScheme: theme === 'light' ? 'light' : 'dark' }} /></div>
+                    <button type="submit" disabled={Boolean(genericSaving.friends)} className="ux-button ux-primary w-full mt-2">{genericSaving.friends ? 'Guardando…' : 'Guardar diagrama manual'}</button>
                   </form>
                 ) : (
                   <form onSubmit={handleSyncAdd} className="space-y-4 animate-in fade-in">

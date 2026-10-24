@@ -1,17 +1,21 @@
 import { test, expect } from '@playwright/test';
 import process from 'node:process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { openConfiguration } from './helpers/configuration';
 
 const phase = process.env.UX_PHASE || 'after';
 const savedState = '.tools/ux-fixture-state.json';
-const restoreFixture = (phase === 'after' || process.env.UX_REUSE === '1') && existsSync(savedState);
 const api = 'http://127.0.0.1:8086/v1/projects/demo-rostermax/databases/(default)/documents/artifacts/roster-max-production';
 const headers = { Authorization:'Bearer owner' };
 const authOnlyState = (state) => ({...state,origins:state.origins.map(origin=>({...origin,indexedDB:(origin.indexedDB||[]).filter(db=>db.name==='firebaseLocalStorageDb')}))});
+const storedFixture=existsSync(savedState)?authOnlyState(JSON.parse(readFileSync(savedState,'utf8'))):null;
+// Recover the demo identity from the saved Auth record, not a before screenshot
+// artifact. A fresh CI worker and a worker restarted after failure both work.
+const fixtureUid=storedFixture?.origins.flatMap(o=>o.indexedDB||[]).flatMap(db=>db.stores||[]).flatMap(s=>s.records||[]).map(r=>r.value?.uid||r.valueEncoded?.o?.find(f=>f.k==='value')?.v?.o?.find(f=>f.k==='uid')?.v).find(uid=>typeof uid==='string'&&uid.length>0);
+const restoreFixture=(phase==='after'||process.env.UX_REUSE==='1')&&Boolean(fixtureUid);
 // Restore identity/preferences, not a dead tab's Firestore primary-lease record.
-test.use({ storageState: restoreFixture ? authOnlyState(JSON.parse(readFileSync(savedState,'utf8'))) : undefined });
+test.use({ storageState: restoreFixture ? storedFixture : undefined });
 test.beforeEach(async ({page}) => {
   await page.clock.setFixedTime(new Date('2026-10-24T15:00:00Z'));
   await page.route('**/*', route => {
@@ -32,22 +36,21 @@ async function fixture(page, request) {
     await page.getByLabel('Nombre visible',{exact:true}).fill('Demo UX');
     await page.getByRole('button',{name:'Terminar y añadir compañeros',exact:true}).click();
   } else {
-    const prior=JSON.parse(await readFile('audit/ux-polish/before/observations.json','utf8'));
     await page.evaluate(async (id)=>{
       const {auth,appEnvironment}=await import('/src/lib/firebase.js');
       if(!appEnvironment.isEmulator) throw Error('Fictitious account restore requires emulators');
       const source=await (await fetch('/src/lib/firebase.js')).text();
       const sdk=await import(source.match(/["'](\/node_modules\/\.vite\/deps\/firebase_auth\.js[^"']*)["']/)[1]);
       await sdk.signInWithCustomToken(auth,JSON.stringify({uid:id}));
-    },prior.uidFictitious);
+    },fixtureUid);
   }
   const uid = await page.evaluate(async ()=>(await import('/src/lib/firebase.js')).auth.currentUser.uid);
   const seed = async (path,fields) => { const r=await request.patch(`${api}/${path}`,{headers,data:{fields}}); expect(r.ok()).toBeTruthy(); };
   // Fixed localhost/demo scope only. Keep the comparison dataset identical
   // when a previous local run saved a synthetic expense or feedback message.
-  for (const [collection,keep] of [['tasks','ux-plan'],['expenses','ux-expense']]) {
+  for (const [collection,keep] of [['tasks',['ux-plan']],['expenses',['ux-expense']],['friends',['ux-manual','ux-linked']],['logs',[]]]) {
     const r=await request.get(`${api}/users/${uid}/${collection}`,{headers});
-    for(const row of (await r.json()).documents||[]) if(row.name.split('/').at(-1)!==keep) await request.delete(`${api}/users/${uid}/${collection}/${row.name.split('/').at(-1)}`,{headers});
+    for(const row of (await r.json()).documents||[]) if(!keep.includes(row.name.split('/').at(-1))) await request.delete(`${api}/users/${uid}/${collection}/${row.name.split('/').at(-1)}`,{headers});
   }
   await request.delete(`${api}/admin_stats/accounts`,{headers});
   const priorFeedback=await request.get(`${api}/public/data/feedback`,{headers});
@@ -159,6 +162,19 @@ test('ediciones sin guardar: solo avisa si cambiaron, mantiene el texto y no con
   await waiting.getByRole('button',{name:'Volver al formulario',exact:true}).click();
   await network(true);
   await expect(page.getByText('Plan ficticio en espera',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Guardando…',exact:true})).toHaveCount(0);
+  await expect(page.getByText('Sincronizado',{exact:true})).toBeVisible();
+  await nav.getByRole('button',{name:'Ajustes',exact:true}).click();
+  await page.getByText('Volver a ver la guía inicial',{exact:true}).click();
+  await page.getByRole('button',{name:'Comenzar',exact:true}).click();
+  await page.getByLabel('Días trabajando').fill('21');
+  await page.getByRole('button',{name:'Cerrar guía',exact:true}).click();
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button',{name:'Seguir editando',exact:true}).click();
+  await expect(page.getByLabel('Días trabajando')).toHaveValue('21');
+  await page.getByLabel('Días trabajando').fill('14');
+  await page.getByRole('button',{name:'Cerrar guía',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
 test('barra opaca, acciones finales accesibles y texto aumentado en móvil estrecho, tablet y escritorio',async ({page,request})=>{
@@ -173,7 +189,8 @@ test('barra opaca, acciones finales accesibles y texto aumentado en móvil estre
         const bg=await nav.evaluate(el=>getComputedStyle(el).backgroundColor); expect(bg).not.toMatch(/\/\s*0\.|rgba\([^)]*,\s*0\./);
         const title={Roster:'Tu calendario',Equipo:'Mi equipo',Franco:'Tu tiempo de franco',Finanzas:'Tu dinero, con un plan',Ajustes:'Cuenta y sincronización',CEO:'Centro de Mando'}[tab];
         await expect(page.getByRole('heading',{name:title,exact:true})).toBeVisible();
-        expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        const layout=await page.evaluate(()=>({width:document.documentElement.scrollWidth,outliers:[...document.querySelectorAll('main *')].filter(el=>el.getBoundingClientRect().right>innerWidth+.5).map(el=>({tag:el.tagName,label:el.getAttribute('aria-label')||el.getAttribute('name')||el.textContent.slice(0,60),right:el.getBoundingClientRect().right})).slice(-8)}));
+        expect(layout.width,`${theme} ${width} ${tab}: ${JSON.stringify(layout.outliers)}`).toBeLessThanOrEqual(width);
         await expect.poll(async()=>page.evaluate(()=>{window.scrollTo({top:document.documentElement.scrollHeight}); const nodes=[...document.querySelectorAll('main button,main input,main select,main textarea')].filter(n=>!n.closest('details:not([open])')&&n.checkVisibility()&&n.getClientRects().length&&n.getBoundingClientRect().width>0); return (nodes.at(-1)?.getBoundingClientRect().bottom||0)-document.querySelector('nav').getBoundingClientRect().top;}),{message:`${theme} ${width} ${tab}: último control visible sobre la barra`}).toBeLessThanOrEqual(1);
       }
     }
@@ -242,4 +259,21 @@ test('error de gasto conserva los campos; guardado offline y doble envío de fee
   await expect(feedback.getByRole('status')).toContainText('Comentario recibido');
   const r=await request.get(`${api}/public/data/feedback`,{headers});
   expect(((await r.json()).documents||[]).filter(d=>d.fields.ownerUid?.stringValue===id&&d.fields.message?.stringValue==='Comentario ficticio de control UX')).toHaveLength(1);
+  await nav.getByRole('button',{name:'Equipo',exact:true}).click();
+  await page.getByText('Añadir compañero',{exact:true}).click();
+  await page.getByLabel('Nombre del compañero').fill('Compañero ficticio doble envío UX');
+  const manual=page.locator('form').filter({has:page.getByLabel('Nombre del compañero')});
+  await manual.getByLabel('Trabajo',{exact:true}).fill('7'); await manual.getByLabel('Descanso',{exact:true}).fill('7');
+  await manual.getByLabel('Última subida del compañero',{exact:true}).fill('2026-10-01');
+  await manual.evaluate(el=>{el.requestSubmit();el.requestSubmit();});
+  await expect(page.getByLabel('Nombre del compañero')).toHaveValue('');
+  const friends=await request.get(`${api}/users/${id}/friends`,{headers});
+  expect(((await friends.json()).documents||[]).filter(d=>d.fields.name?.stringValue==='Compañero ficticio doble envío UX')).toHaveLength(1);
+  await nav.getByRole('button',{name:'Roster',exact:true}).click();
+  await page.getByLabel('Nueva nota de relevo').fill('Nota ficticia doble envío UX');
+  const log=page.locator('form').filter({has:page.getByLabel('Nueva nota de relevo')});
+  await log.evaluate(el=>{el.requestSubmit();el.requestSubmit();});
+  await expect(page.getByLabel('Nueva nota de relevo')).toHaveValue('');
+  const logs=await request.get(`${api}/users/${id}/logs`,{headers});
+  expect(((await logs.json()).documents||[]).filter(d=>d.fields.content?.stringValue==='Nota ficticia doble envío UX')).toHaveLength(1);
 });
