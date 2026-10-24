@@ -5,7 +5,7 @@ import process from 'node:process';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
 import {
   collection, deleteDoc, doc, getDoc, getDocs, runTransaction,
-  serverTimestamp, setDoc, setLogLevel, Timestamp, updateDoc, writeBatch,
+  serverTimestamp, setDoc, setLogLevel, Timestamp, updateDoc, writeBatch, query, where,
 } from 'firebase/firestore';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
@@ -111,7 +111,7 @@ describe('reglas reales de Firestore (emulador local)', { skip: !emulatorHost },
   it('restringe censo agregado al CEO con esquema cerrado y fecha de servidor', async () => {
     const path = `artifacts/${APP}/admin_stats/accounts`;
     const census = {
-      schemaVersion: 1, source: 'firebase-auth', projectId: 'rostermax-60242', generatedAt: serverTimestamp(),
+      schemaVersion: 1, source: 'firebase-auth', projectId: 'demo-rostermax-security', generatedAt: serverTimestamp(),
       totalAccounts: 4, registeredAccounts: 3, guestAccounts: 1, googleAccounts: 3, disabledAccounts: 0,
       createdLast7Days: 1, createdLast30Days: 2, signInsLast24Hours: 1, signInsLast7Days: 2, signInsLast30Days: 3,
     };
@@ -246,5 +246,87 @@ describe('reglas reales de Firestore (emulador local)', { skip: !emulatorHost },
     await updateDoc(reverseFromOwner, { privateNotes: 'Esta nota pertenece sólo a Ana' });
     await assertFails(getDoc(reverseFromBob));
     await assertSucceeds(getDoc(reverseFromOwner));
+  });
+
+  it('el registro inactivo revoca claims persistentes y una cuenta normal nunca administra', async () => {
+    const claimed = env.authenticatedContext('claimed', { admin: true }).firestore();
+    await assertSucceeds(getDocs(collection(claimed, publicPath('activity'))));
+    await env.withSecurityRulesDisabled((context) => setDoc(doc(context.firestore(), `artifacts/${APP}/admins/claimed`), { active: false }));
+    await assertFails(getDocs(collection(claimed, publicPath('activity'))));
+    await assertFails(getDoc(doc(claimed, `artifacts/${APP}/admin_stats/accounts`)));
+    await assertFails(getDocs(collection(bob, publicPath('feedback'))));
+  });
+
+  it('retirar o rotar el acceso deniega leer/publicar el código antiguo, también desde otro cliente', async () => {
+    const settings = doc(alice, privatePath('alice', 'settings/sync'));
+    const ref = doc(alice, publicPath('sync_codes/RM-AAAAAAAA'));
+    const value = sharedRoster('alice', 'RM-AAAAAAAA');
+    await setDoc(settings, { code: 'RM-AAAAAAAA', enabled: true });
+    await setDoc(ref, value);
+    await assertSucceeds(getDoc(doc(bob, publicPath('sync_codes/RM-AAAAAAAA'))));
+    // Even if deletion has not happened, disabling the setting revokes reads.
+    await setDoc(settings, { code: 'RM-AAAAAAAA', enabled: false });
+    await assertFails(getDoc(doc(bob, publicPath('sync_codes/RM-AAAAAAAA'))));
+    await assertFails(setDoc(ref, value));
+    await setDoc(settings, { code: 'RM-BBBBBBBB', enabled: true });
+    await assertFails(setDoc(ref, value));
+    await assertFails(getDoc(doc(bob, publicPath('sync_codes/RM-AAAAAAAA'))));
+    await assertSucceeds(setDoc(doc(alice, publicPath('sync_codes/RM-BBBBBBBB')), sharedRoster('alice', 'RM-BBBBBBBB')));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('historial compartido v2 conserva compatibilidad v1 y rechaza notas y campos privados', async () => {
+    const ref = doc(alice, publicPath('sync_codes/RM-AAAAAAAA'));
+    const value = sharedRoster('alice', 'RM-AAAAAAAA');
+    await assertSucceeds(setDoc(ref, value));
+    const history = 'B|7|7|2024-01-01' + Array.from({ length: 20 }, (_, i) => `;P|2026-01-${String(i + 1).padStart(2, '0')}|14|7|2026-01-01`).join('');
+    await assertSucceeds(setDoc(ref, { ...value, history }));
+    await assertFails(setDoc(ref, { ...value, history: history + ';P|2026-01-30|7|7|2026-01-01' }));
+    await assertFails(setDoc(ref, { ...value, history: history + '|Nota médica' }));
+  });
+
+  it('eventos mínimos requieren consentimiento, IDs estables y no admiten contenido privado', async () => {
+    const ref = doc(alice, publicPath('feature_events/alice_op-one'));
+    const value = { ownerUid: 'alice', type: 'expense_recorded', occurredAt: serverTimestamp(), recordedAt: serverTimestamp() };
+    await assertFails(setDoc(ref, value));
+    await consent(alice, 'alice');
+    await assertFails(setDoc(ref, { ...value, amount: 3000 }));
+    await assertFails(setDoc(ref, { ...value, occurredAt: Timestamp.fromMillis(1) }));
+    await assertSucceeds(setDoc(ref, value));
+    await assertFails(setDoc(ref, value));
+    await assertFails(updateDoc(ref, { type: 'goal_created' }));
+    await assertFails(setDoc(doc(alice, publicPath('feature_events/alice_bob_op')), { ...value, ownerUid: 'bob' }));
+    await assertSucceeds(getDoc(doc(admin, publicPath('feature_events/alice_op-one'))));
+    await assertFails(getDoc(doc(bob, publicPath('feature_events/alice_op-one'))));
+    await assertFails(getDocs(collection(alice, publicPath('feature_events'))));
+    await assertSucceeds(getDocs(query(collection(alice, publicPath('feature_events')), where('ownerUid', '==', 'alice'))));
+    await assertFails(getDocs(query(collection(bob, publicPath('feature_events')), where('ownerUid', '==', 'alice'))));
+    await consent(alice, 'alice', false);
+    await assertFails(setDoc(doc(alice, publicPath('feature_events/alice_second')), value));
+    await assertSucceeds(deleteDoc(ref));
+  });
+
+  it('borrado de métricas propias usa consulta acotada sin permitir listar otras cuentas', async () => {
+    await consent(alice, 'alice'); await consent(bob, 'bob');
+    await setDoc(doc(alice, publicPath('campaign_metrics/campaign_alice')), campaignMetric('alice'));
+    await setDoc(doc(bob, publicPath('campaign_metrics/campaign_bob')), campaignMetric('bob'));
+    const own = await assertSucceeds(getDocs(query(collection(alice, publicPath('campaign_metrics')), where('ownerUid', '==', 'alice'))));
+    assert.equal(own.size, 1);
+    await assertFails(getDocs(query(collection(alice, publicPath('campaign_metrics')), where('ownerUid', '==', 'bob'))));
+    await assertFails(getDocs(collection(alice, publicPath('campaign_metrics'))));
+  });
+
+  it('registra acciones administrativas sin finanzas y limita atención de feedback a estado', async () => {
+    const auditRef = doc(admin, `artifacts/${APP}/admin_audit/action`);
+    const action = { actorUid: 'owner', action: 'feedback_status', targetId: 'feedback', createdAt: serverTimestamp() };
+    await assertSucceeds(setDoc(auditRef, action));
+    await assertFails(getDoc(doc(alice, `artifacts/${APP}/admin_audit/action`)));
+    await assertFails(setDoc(doc(alice, `artifacts/${APP}/admin_audit/fake`), { ...action, actorUid: 'alice' }));
+    await assertFails(setDoc(doc(admin, `artifacts/${APP}/admin_audit/content`), { ...action, note: 'private' }));
+    const feedback = doc(alice, publicPath('feedback/feedback'));
+    await setDoc(feedback, { ownerUid:'alice', name:'Prueba', category:'idea', message:'Idea ficticia de prueba', status:'new', createdAt:serverTimestamp() });
+    await assertSucceeds(updateDoc(doc(admin, publicPath('feedback/feedback')), { status:'in_progress', updatedAt:serverTimestamp() }));
+    await assertFails(updateDoc(doc(admin, publicPath('feedback/feedback')), { message:'replaced', status:'resolved', updatedAt:serverTimestamp() }));
+    await assertFails(updateDoc(feedback, { status:'resolved', updatedAt:serverTimestamp() }));
   });
 });

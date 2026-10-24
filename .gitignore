@@ -15,6 +15,10 @@ test-results*/
 playwright-report/
 .firebase/
 *.local
+.env
+.env.production
+.env.preview
+.env.development
 
 # Editor directories and files
 .vscode/*

@@ -60,6 +60,12 @@ async function finishOnboarding(page, { workDays = 7, restDays = 7, startDate = 
   await dialog.getByLabel('Zona o yacimiento (privado)').fill('Añelo');
   await dialog.getByRole('button', { name: 'Terminar y añadir compañeros' }).click();
   await expect(dialog).toBeHidden();
+  // New accounts choose their weather location explicitly; no assumed city.
+  await page.evaluate(async () => {
+    const { db, auth, APP_ID } = await import('/src/lib/firebase.js');
+    const { doc, setDoc } = await import((await (await fetch('/src/lib/firebase.js')).text()).match(/["'](\/node_modules\/\.vite\/deps\/firebase_firestore\.js[^"']*)["']/)[1]);
+    await setDoc(doc(db, 'artifacts', APP_ID, 'users', auth.currentUser.uid, 'settings', 'profile'), { weatherLocation: { name: 'Neuquén', label: 'Neuquén, Argentina', latitude: -38.95, longitude: -68.06 } }, { merge: true });
+  });
 }
 
 async function screenshot(page, testInfo, name) {

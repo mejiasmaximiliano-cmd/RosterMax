@@ -12,12 +12,73 @@ service cloud.firestore {
 
     function isAdmin(appId) {
       return signedIn() && (
-        request.auth.token.get('admin', false) == true
-        || (
-          exists(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid))
-          && get(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid)).data.get('active', false) == true
-        )
+        exists(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/artifacts/$(appId)/admins/$(request.auth.uid)).data.get('active', false) == true
+        : request.auth.token.get('admin', false) == true
       );
+    }
+
+    function validCompensatoryDebt(d) {
+      return d.keys().hasOnly(['schemaVersion', 'direction', 'totalUnits', 'settledUnits', 'settlements', 'voided', 'informativeDate', 'note', 'revision', 'lastEventId', 'createdAt', 'updatedAt'])
+        && d.schemaVersion == 1 && d.direction in ['company_owes', 'worker_owes']
+        && d.totalUnits is int && d.totalUnits >= 1 && d.totalUnits <= 20000
+        && d.settledUnits is int && d.settledUnits >= 0 && d.settledUnits <= d.totalUnits
+        && d.settlements is map && d.settlements.size() <= 200 && d.voided is bool
+        && d.informativeDate is string && d.informativeDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+        && d.note is string && d.note.size() <= 500
+        && d.revision is int && d.revision >= 1
+        && d.lastEventId is string && d.lastEventId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && d.createdAt is timestamp && d.updatedAt == request.time;
+    }
+
+    function validCompensatoryEvent(e) {
+      return e.keys().hasOnly(['schemaVersion', 'debtId', 'kind', 'units', 'previousUnits', 'referenceId', 'informativeDate', 'note', 'revision', 'createdAt'])
+        && e.schemaVersion == 1 && e.debtId is string && e.debtId.matches('^[A-Za-z0-9_-]{1,80}$')
+        && e.kind in ['open', 'edit', 'settle', 'edit_settlement', 'void_settlement', 'void']
+        && e.units is int && e.units >= 0 && e.units <= 20000
+        && e.previousUnits is int && e.previousUnits >= 0 && e.previousUnits <= 20000
+        && e.referenceId is string && e.referenceId.size() <= 80
+        && e.informativeDate is string && e.informativeDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+        && e.note is string && e.note.size() <= 500
+        && e.revision is int && e.revision >= 1 && e.createdAt == request.time;
+    }
+
+    function compensatoryCreation(appId, uid, debtId) {
+      let d = request.resource.data;
+      let e = getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(uid)/compensatory_entries/$(d.lastEventId)).data;
+      return validCompensatoryDebt(d) && !exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(uid)/compensatory_entries/$(d.lastEventId))
+        && validCompensatoryEvent(e) && e.debtId == debtId && e.kind == 'open'
+        && e.revision == 1 && d.revision == 1 && d.createdAt == request.time
+        && d.totalUnits == e.units && d.settledUnits == 0 && d.settlements.size() == 0 && d.voided == false
+        && d.informativeDate == e.informativeDate && d.note == e.note && e.previousUnits == 0 && e.referenceId == '';
+    }
+
+    function compensatoryUpdate(appId, uid, debtId) {
+      let d = request.resource.data;
+      let old = resource.data;
+      let e = getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(uid)/compensatory_entries/$(d.lastEventId)).data;
+      let common = ['revision', 'lastEventId', 'updatedAt'];
+      return validCompensatoryDebt(d) && validCompensatoryEvent(e)
+        && !exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(uid)/compensatory_entries/$(d.lastEventId))
+        && old.voided == false && e.debtId == debtId && e.revision == d.revision && d.revision == old.revision + 1
+        && d.createdAt == old.createdAt && d.direction == old.direction
+        && (
+          (e.kind == 'edit' && d.diff(old).affectedKeys().hasOnly(common.concat(['totalUnits', 'informativeDate', 'note']))
+            && e.units == d.totalUnits && e.previousUnits == old.totalUnits && e.units >= old.settledUnits
+            && d.informativeDate == e.informativeDate && d.note == e.note && e.referenceId == '')
+          || (e.kind == 'void' && d.diff(old).affectedKeys().hasOnly(common.concat(['voided']))
+            && old.settledUnits == 0 && old.settlements.size() == 0 && d.voided == true && e.units == 0 && e.previousUnits == old.totalUnits && e.referenceId == '')
+          || (e.kind == 'settle' && d.diff(old).affectedKeys().hasOnly(common.concat(['settledUnits', 'settlements']))
+            && e.referenceId == d.lastEventId && e.units > 0 && e.previousUnits == 0 && !old.settlements.keys().hasAny([e.referenceId])
+            && d.settlements.diff(old.settlements).affectedKeys().hasOnly([e.referenceId]) && d.settlements.get(e.referenceId, 0) == e.units
+            && d.settledUnits == old.settledUnits + e.units)
+          || (e.kind in ['edit_settlement', 'void_settlement'] && d.diff(old).affectedKeys().hasOnly(common.concat(['settledUnits', 'settlements']))
+            && e.previousUnits > 0 && old.settlements.get(e.referenceId, 0) == e.previousUnits
+            && d.settlements.diff(old.settlements).affectedKeys().hasOnly([e.referenceId])
+            && ((e.kind == 'void_settlement' && e.units == 0 && !d.settlements.keys().hasAny([e.referenceId]))
+              || (e.kind == 'edit_settlement' && e.units > 0 && d.settlements.get(e.referenceId, 0) == e.units))
+            && d.settledUnits == old.settledUnits + e.units - e.previousUnits)
+        );
     }
 
     // El documento compartido contiene disponibilidad, nunca el motivo de
@@ -77,11 +138,20 @@ service cloud.firestore {
         && metricId[prefixSize:metricId.size()] == suffix;
     }
 
-    function validSharedRoster(data, code) {
+    function ownsFeatureId(eventId) {
+      let prefix = request.auth.uid + '_';
+      return signedIn() && eventId.size() > prefix.size()
+        && eventId[0:prefix.size()] == prefix
+        && eventId[prefix.size():eventId.size()].matches('^[A-Za-z0-9_-]{1,80}$');
+    }
+
+    function validSharedRoster(data, code, appId) {
+      let syncPath = /databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/settings/sync;
       return data.keys().hasOnly([
-          'ownerUid', 'syncCode', 'name', 'workDays', 'restDays', 'startDate', 'exceptions', 'updatedAt'
+          'ownerUid', 'syncCode', 'name', 'workDays', 'restDays', 'startDate', 'exceptions', 'history', 'updatedAt'
         ])
         && data.ownerUid == request.auth.uid
+        && (!exists(syncPath) || (getAfter(syncPath).data.get('enabled', true) == true && getAfter(syncPath).data.code == code))
         && data.syncCode == code
         && code.matches('^RM-[A-Z0-9]{8}$')
         && data.name is string
@@ -96,7 +166,14 @@ service cloud.firestore {
         && data.startDate is string
         && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
         && (!data.keys().hasAny(['exceptions']) || validSharedExceptions(data.exceptions))
+        && (!data.keys().hasAny(['history']) || (data.history is string && data.history.size() <= 2000
+          && data.history.matches('^B[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|][0-9]{4}-[0-9]{2}-[0-9]{2}(;P[|][0-9]{4}-[0-9]{2}-[0-9]{2}[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|]([1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])[|][0-9]{4}-[0-9]{2}-[0-9]{2}){0,20}$')))
         && data.updatedAt == request.time;
+    }
+
+    function sharingActive(appId, ownerUid, code) {
+      let p = /databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/settings/sync;
+      return !exists(p) || (get(p).data.get('enabled', true) == true && get(p).data.code == code);
     }
 
     function validActivity(data, userId) {
@@ -139,8 +216,10 @@ service cloud.firestore {
           'schemaVersion', 'source', 'projectId', 'generatedAt',
           'totalAccounts', 'registeredAccounts', 'guestAccounts', 'googleAccounts', 'disabledAccounts',
           'createdLast7Days', 'createdLast30Days', 'signInsLast24Hours', 'signInsLast7Days', 'signInsLast30Days'
+          , 'createdLast24Hours', 'createdRegisteredLast24Hours', 'createdGuestLast24Hours',
+          'createdRegisteredLast7Days', 'createdGuestLast7Days', 'createdRegisteredLast30Days', 'createdGuestLast30Days'
         ])
-        && data.schemaVersion == 1 && data.source == 'firebase-auth' && data.projectId == 'rostermax-60242'
+        && data.schemaVersion == 1 && data.source == 'firebase-auth' && data.projectId == request.auth.token.aud
         && data.generatedAt == request.time
         && validCensusCount(data.totalAccounts)
         && validCensusCount(data.registeredAccounts) && validCensusCount(data.guestAccounts)
@@ -151,7 +230,17 @@ service cloud.firestore {
         && data.googleAccounts <= data.registeredAccounts && data.disabledAccounts <= data.totalAccounts
         && data.createdLast7Days <= data.createdLast30Days && data.createdLast30Days <= data.totalAccounts
         && data.signInsLast24Hours <= data.signInsLast7Days
-        && data.signInsLast7Days <= data.signInsLast30Days && data.signInsLast30Days <= data.totalAccounts;
+        && data.signInsLast7Days <= data.signInsLast30Days && data.signInsLast30Days <= data.totalAccounts
+        && (!data.keys().hasAny(['createdLast24Hours', 'createdRegisteredLast24Hours', 'createdGuestLast24Hours', 'createdRegisteredLast7Days', 'createdGuestLast7Days', 'createdRegisteredLast30Days', 'createdGuestLast30Days'])
+          || (validCensusCount(data.createdLast24Hours) && validCensusCount(data.createdRegisteredLast24Hours) && validCensusCount(data.createdGuestLast24Hours)
+            && validCensusCount(data.createdRegisteredLast7Days) && validCensusCount(data.createdGuestLast7Days)
+            && validCensusCount(data.createdRegisteredLast30Days) && validCensusCount(data.createdGuestLast30Days)
+            && data.createdRegisteredLast24Hours + data.createdGuestLast24Hours == data.createdLast24Hours
+            && data.createdRegisteredLast7Days + data.createdGuestLast7Days == data.createdLast7Days
+            && data.createdRegisteredLast30Days + data.createdGuestLast30Days == data.createdLast30Days
+            && data.createdLast24Hours <= data.createdLast7Days
+            && data.createdRegisteredLast24Hours <= data.createdRegisteredLast7Days && data.createdRegisteredLast7Days <= data.createdRegisteredLast30Days
+            && data.createdGuestLast24Hours <= data.createdGuestLast7Days && data.createdGuestLast7Days <= data.createdGuestLast30Days));
     }
 
     function validAd(data) {
@@ -240,18 +329,36 @@ service cloud.firestore {
       }
 
       // Cada usuario solo puede leer y modificar su propio espacio privado.
-      match /users/{userId}/{document=**} {
-        allow read, write: if owns(userId);
+      match /users/{userId}/{collectionId}/{document=**} {
+        allow read, write: if owns(userId) && !(collectionId in ['compensatory_debts', 'compensatory_entries']);
+      }
+
+      match /users/{userId}/compensatory_debts/{debtId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && debtId.matches('^[A-Za-z0-9_-]{1,80}$') && compensatoryCreation(appId, userId, debtId);
+        allow update: if owns(userId) && compensatoryUpdate(appId, userId, debtId);
+        allow delete: if false;
+      }
+
+      match /users/{userId}/compensatory_entries/{entryId} {
+        allow read: if owns(userId);
+        allow create: if owns(userId) && entryId.matches('^[A-Za-z0-9_-]{1,80}$')
+          && validCompensatoryEvent(request.resource.data)
+          && getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(userId)/compensatory_debts/$(request.resource.data.debtId)).data.lastEventId == entryId
+          && getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(userId)/compensatory_debts/$(request.resource.data.debtId)).data.revision == request.resource.data.revision
+          && getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(userId)/compensatory_debts/$(request.resource.data.debtId)).data.updatedAt == request.time;
+        allow update, delete: if false;
       }
 
       // Un código compartido permite leer un roster exacto, pero nunca listar
       // ni enumerar todos los códigos o trabajadores.
       match /public/data/sync_codes/{code} {
-        allow get: if signedIn();
+        allow get: if signedIn() && (!exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(code))
+          || sharingActive(appId, resource.data.ownerUid, code));
         allow list: if false;
         allow create, update: if signedIn()
           && (!exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/sync_codes/$(code)) || resource.data.ownerUid == request.auth.uid)
-          && validSharedRoster(request.resource.data, code);
+          && validSharedRoster(request.resource.data, code, appId);
         allow delete: if signedIn()
           && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
       }
@@ -268,7 +375,11 @@ service cloud.firestore {
       // una lista pública. Solo el administrador puede leerlos o moderarlos.
       match /public/data/feedback/{feedbackId} {
         allow create: if signedIn() && validFeedback(request.resource.data);
-        allow read, update, delete: if isAdmin(appId);
+        allow read, delete: if isAdmin(appId);
+        allow update: if isAdmin(appId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && request.resource.data.status in ['new', 'in_progress', 'resolved']
+          && request.resource.data.updatedAt == request.time;
       }
 
       // El usuario participa sólo si activa la medición. Puede consultar o
@@ -287,13 +398,40 @@ service cloud.firestore {
         allow delete: if owns(userId) || isAdmin(appId);
       }
 
+      // Immutable minimal operation metadata. No private record content.
+      match /public/data/feature_events/{eventId} {
+        allow get: if isAdmin(appId) || ownsFeatureId(eventId);
+        allow list: if isAdmin(appId) || (signedIn() && resource.data.ownerUid == request.auth.uid);
+        allow create: if signedIn() && analyticsConsent(appId)
+          && request.resource.data.keys().hasOnly(['ownerUid', 'type', 'occurredAt', 'recordedAt'])
+          && request.resource.data.ownerUid == request.auth.uid
+          && ownsFeatureId(eventId)
+          && request.resource.data.type in ['roster_configured', 'invitation_accepted', 'plan_saved', 'expense_recorded', 'goal_created', 'compensatory_recorded']
+          && request.resource.data.occurredAt is timestamp && request.resource.data.occurredAt <= request.time
+          && request.resource.data.occurredAt >= getAfter(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/settings/privacy).data.updatedAt
+          && request.resource.data.recordedAt == request.time;
+        allow update: if false;
+        allow delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin(appId));
+      }
+
+      match /admin_audit/{eventId} {
+        allow read: if isAdmin(appId);
+        allow create: if isAdmin(appId)
+          && request.resource.data.keys().hasOnly(['actorUid', 'action', 'targetId', 'createdAt'])
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.action in ['census_refreshed', 'campaign_created', 'campaign_paused', 'feedback_status']
+          && request.resource.data.targetId is string && request.resource.data.targetId.size() <= 100
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
       // Una campaña guarda un documento agregado por usuario. Los contadores
       // sólo pueden avanzar de a un evento; el panel CEO ve el agregado.
       match /public/data/campaign_metrics/{metricId} {
         allow get: if signedIn() && (isAdmin(appId)
           || (!exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/campaign_metrics/$(metricId)) && ownsMetricId(metricId))
           || (exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/campaign_metrics/$(metricId)) && resource.data.ownerUid == request.auth.uid));
-        allow list: if isAdmin(appId);
+        allow list: if isAdmin(appId) || (signedIn() && resource.data.ownerUid == request.auth.uid);
         allow create: if signedIn() && analyticsConsent(appId)
           && validCampaignMetric(request.resource.data, metricId, appId)
           && request.resource.data.firstViewAt == request.time

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { useDialogFocus } from '../lib/useDialogFocus';
 import { Calendar, CheckCircle2, ChevronRight, ShieldCheck, Users, X } from 'lucide-react';
 
 const steps = [
@@ -17,6 +18,8 @@ export default function OnboardingModal({
   onSkip,
 }) {
   const [step, setStep] = useState(0);
+  const dialogRef = useRef(null);
+  useDialogFocus(dialogRef, onSkip);
   const [saving, setSaving] = useState(false);
   const dark = theme !== 'light';
   const panel = dark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900';
@@ -50,7 +53,7 @@ export default function OnboardingModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-sm p-4 flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+    <div ref={dialogRef} className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-sm p-4 flex items-center justify-center overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
       <div className={`w-full max-w-md rounded-3xl border shadow-2xl overflow-hidden ${panel}`}>
         <div className="h-1.5 bg-slate-800">
           <div className="h-full bg-gradient-to-r from-emerald-500 to-blue-500 transition-all" style={{ width: `${((step + 1) / steps.length) * 100}%` }} />

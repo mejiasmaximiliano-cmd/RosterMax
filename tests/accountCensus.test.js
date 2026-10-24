@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchAccountCensus, summarizeAccountPage } from '../src/lib/accountCensus.js';
+import { fetchAccountCensus as fetchCensus, summarizeAccountPage } from '../src/lib/accountCensus.js';
+const fetchAccountCensus = (token, options) => fetchCensus(token, { projectId: 'rostermax-60242', ...options });
 
 const now = new Date('2026-09-25T12:00:00Z');
 const response = (body, status = 200) => ({ ok: status === 200, status, json: async () => body });
+
+test('census requires an explicit project and never calls production for a demo project', async () => {
+  for (const projectId of [undefined, '', 'demo-rostermax']) await assert.rejects(fetchCensus('test', { projectId, fetchImpl: () => { throw new Error('must not fetch'); } }), { code: 'census/invalid-project' });
+});
 
 test('censo completo pagina con máscara mínima y nunca devuelve identidades ni token', async () => {
   let page = 0;

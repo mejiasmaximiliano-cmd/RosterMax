@@ -32,7 +32,7 @@ Requiere Node.js 22.12 o superior. La beta 0.5 añade calendario mensual exporta
 
 ```bash
 npm ci
-npm run dev
+npm run dev:emulator
 ```
 
 Verificaciones:
@@ -40,14 +40,14 @@ Verificaciones:
 ```bash
 npm test
 npm run lint
-npm run build
+npm run build:emulator
 ```
 
 Las pruebas unitarias no se conectan a producción. Las pruebas de reglas se omiten sin `FIRESTORE_EMULATOR_HOST`. Para ejecutar reglas e interfaz móvil con datos ficticios, consultar [pruebas locales](docs/BETA_0_5.md#pruebas-locales).
 
 ## Firebase
 
-La configuración del cliente puede definirse mediante las variables listadas en `.env.example`. El dominio canónico de producción es `https://rostermax.vercel.app`. Antes de publicar hay que desplegar las reglas y activar el registro privado de la cuenta administradora.
+La configuración del cliente es obligatoria y explícita; no hay respaldo silencioso hacia producción. Para desarrollo se usan emuladores. Preview necesita un proyecto aislado. `npm run build` sin configuración se rechaza antes de iniciar Firebase. Ver [entornos y variables](docs/ENVIRONMENTS.md). El dominio canónico de producción sigue siendo `https://rostermax.vercel.app` y sus identificadores se conservan.
 
 Consultar [docs/FIREBASE_SETUP.md](docs/FIREBASE_SETUP.md).
 

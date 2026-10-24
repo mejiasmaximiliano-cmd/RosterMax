@@ -1,4 +1,5 @@
 import { decodeSharedExceptions, encodeSharedExceptions } from './sharedSchedule.js';
+import { rosterForDate } from './rosterHistory.js';
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
@@ -160,7 +161,7 @@ export function getStatusForDate(dateStr, config) {
   const targetDate = parseDateOnly(dateStr);
   if (targetDate === null) return { error: 'Fecha inválida' };
 
-  const baseStatus = getBaseStatus(targetDate, config);
+  const baseStatus = getBaseStatus(targetDate, rosterForDate(config, dateStr));
   if (baseStatus.error) return baseStatus;
 
   const exception = findScheduleException(dateStr, config?.exceptions);
@@ -202,7 +203,7 @@ export function getNextTransition(dateStr, config) {
     const nextDate = addDaysToDate(dateStr, offset);
     const nextStatus = getStatusForDate(nextDate, config);
     if (!nextStatus.error && nextStatus.isWorking !== status.isWorking) {
-      return { date: nextDate, daysUntil: offset, nextStatus: nextStatus.isWorking ? 'work' : 'rest' };
+      return { date: nextDate, daysUntil: offset, nextStatus: nextStatus.isWorking ? 'work' : 'rest', ...(!nextStatus.isWorking && !isRestAvailable(nextStatus) ? { unavailable: true } : {}) };
     }
   }
   return { error: 'No se encontró el próximo cambio de roster.' };

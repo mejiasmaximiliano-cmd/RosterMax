@@ -1,9 +1,10 @@
-const PROJECT_ID = 'rostermax-60242';
 const DAY_MS = 86400000;
 const ACCOUNT_FIELDS = 'users(providerUserInfo/providerId,disabled,createdAt,lastLoginAt,customAuth,emailLinkSignin),nextPageToken';
 const COUNT_FIELDS = [
   'totalAccounts', 'registeredAccounts', 'guestAccounts', 'googleAccounts', 'disabledAccounts',
   'createdLast7Days', 'createdLast30Days', 'signInsLast24Hours', 'signInsLast7Days', 'signInsLast30Days',
+  'createdLast24Hours', 'createdRegisteredLast24Hours', 'createdGuestLast24Hours',
+  'createdRegisteredLast7Days', 'createdGuestLast7Days', 'createdRegisteredLast30Days', 'createdGuestLast30Days',
 ];
 
 function censusError(code) {
@@ -33,6 +34,10 @@ export function summarizeAccountPage(users, now = new Date()) {
     if (user.disabled === true) result.disabledAccounts += 1;
     if (within(user.createdAt, 7)) result.createdLast7Days += 1;
     if (within(user.createdAt, 30)) result.createdLast30Days += 1;
+    for (const [suffix, days] of [['24Hours', 1], ['7Days', 7], ['30Days', 30]]) {
+      if (within(user.createdAt, days)) result[`created${registered ? 'Registered' : 'Guest'}Last${suffix}`]++;
+    }
+    if (within(user.createdAt, 1)) result.createdLast24Hours++;
     if (within(user.lastLoginAt, 1)) result.signInsLast24Hours += 1;
     if (within(user.lastLoginAt, 7)) result.signInsLast7Days += 1;
     if (within(user.lastLoginAt, 30)) result.signInsLast30Days += 1;
@@ -48,9 +53,10 @@ export function summarizeAccountPage(users, now = new Date()) {
  * Account creation/login statistics are not app usage or install measurements.
  */
 export async function fetchAccountCensus(accessToken, {
-  fetchImpl = globalThis.fetch, now = new Date(), timeoutMs = 30000, maxPages = 1000, signal,
+  projectId, fetchImpl = globalThis.fetch, now = new Date(), timeoutMs = 30000, maxPages = 1000, signal,
 } = {}) {
   if (typeof accessToken !== 'string' || !accessToken) throw censusError('census/missing-token');
+  if (typeof projectId !== 'string' || !/^[a-z][a-z0-9-]{4,29}$/.test(projectId) || projectId.startsWith('demo-')) throw censusError('census/invalid-project');
   if (!Number.isInteger(maxPages) || maxPages < 1 || !Number.isFinite(timeoutMs) || timeoutMs <= 0
     || !(now instanceof Date) || !Number.isFinite(now.getTime())) throw censusError('census/invalid-options');
   const controller = new AbortController();
@@ -65,7 +71,7 @@ export async function fetchAccountCensus(accessToken, {
   try {
     for (let page = 0; page < maxPages; page += 1) {
       if (controller.signal.aborted) throw censusError(deadlineReached ? 'census/timeout' : 'census/cancelled');
-      const url = new URL(`https://identitytoolkit.googleapis.com/v1/projects/${PROJECT_ID}/accounts:batchGet`);
+      const url = new URL(`https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:batchGet`);
       url.searchParams.set('maxResults', '1000');
       url.searchParams.set('fields', ACCOUNT_FIELDS);
       if (nextPageToken) url.searchParams.set('nextPageToken', nextPageToken);
@@ -89,7 +95,7 @@ export async function fetchAccountCensus(accessToken, {
       nextPageToken = data.nextPageToken;
       if (!nextPageToken) {
         if (controller.signal.aborted) throw censusError(deadlineReached ? 'census/timeout' : 'census/cancelled');
-        return { schemaVersion: 1, source: 'firebase-auth', projectId: PROJECT_ID, ...totals };
+        return { schemaVersion: 1, source: 'firebase-auth', projectId, ...totals };
       }
       if (seenTokens.has(nextPageToken)) throw censusError('census/repeated-page');
       seenTokens.add(nextPageToken);

@@ -1,5 +1,7 @@
 # Borrador de política de privacidad de RosterMax
 
+Estado técnico local, misión integral 24/10/2026: se incorporaron exportación privada, desactivación/borrado de medición propia y solicitud de eliminación en Feedback con atención manual. Esto no equivale a un borrado automático de cuenta ni confirma cumplimiento legal. La identidad/contacto reales del responsable, conservación y procedimiento definitivo siguen pendientes. Nada de esta misión se publicó en producción.
+
 > Pendiente antes de publicar: completar nombre o razón social, domicilio, correo de privacidad, jurisdicción, plazos de conservación y procedimiento definitivo de eliminación. Este documento debe recibir revisión legal.
 
 ## Responsable

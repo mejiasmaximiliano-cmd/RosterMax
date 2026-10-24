@@ -13,6 +13,8 @@ test('distingue cuentas vinculadas e invitados sin equiparar login con actividad
   ], now), {
     totalAccounts: 4, registeredAccounts: 3, guestAccounts: 1, disabledAccounts: 1, googleAccounts: 1,
     signInsLast24Hours: 1, signInsLast7Days: 2, signInsLast30Days: 3, createdLast7Days: 1, createdLast30Days: 1,
+    createdLast24Hours: 1, createdRegisteredLast24Hours: 1, createdGuestLast24Hours: 0,
+    createdRegisteredLast7Days: 1, createdGuestLast7Days: 0, createdRegisteredLast30Days: 1, createdGuestLast30Days: 0,
   });
 });
 

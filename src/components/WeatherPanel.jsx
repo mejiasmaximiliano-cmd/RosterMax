@@ -139,6 +139,7 @@ function WeatherContent({ theme = 'dark', location = {}, onChangeLocation }) {
 }
 
 export default function WeatherPanel(props) {
+  if (!props.location || !Number.isFinite(props.location.latitude) || !Number.isFinite(props.location.longitude)) return <button type="button" onClick={props.onChangeLocation} className="min-h-28 rounded-2xl border border-blue-500/30 p-4 text-sm text-blue-500"><MapPin className="mx-auto mb-2" aria-hidden="true"/>Elegir ubicación del clima</button>;
   const locationKey = `${props.location?.latitude ?? 'none'}:${props.location?.longitude ?? 'none'}`;
   return <WeatherContent key={locationKey} {...props}/>;
 }

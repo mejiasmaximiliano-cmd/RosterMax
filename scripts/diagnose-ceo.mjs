@@ -50,9 +50,10 @@ async function clients() {
   auth.setActiveAccount(options, account);
   await requireAuth(options, true);
   return {
-    census: async (now) => fetchAccountCensus(await getAccessToken(), { now, timeoutMs: 60000 }),
+    census: async (now) => fetchAccountCensus(await getAccessToken(), { projectId: PROJECT, now, timeoutMs: 60000 }),
     firestore: new Client({ urlPrefix: 'https://firestore.googleapis.com', apiVersion: 'v1', auth: true }),
     billing: new Client({ urlPrefix: 'https://cloudbilling.googleapis.com', apiVersion: 'v1', auth: true }),
+    identity: new Client({ urlPrefix: 'https://identitytoolkit.googleapis.com', apiVersion: 'v1', auth: true }),
   };
 }
 
@@ -114,6 +115,34 @@ async function billingSummary(client) {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === '--inspect') {
+    const api = await clients();
+    const census = await api.firestore.get(`${DATABASE}/artifacts/${APP}/admin_stats/accounts`, { ...REQUEST_OPTIONS });
+    const registry = await api.firestore.get(`${DATABASE}/artifacts/${APP}/admins`, { ...REQUEST_OPTIONS, queryParams: { 'mask.fieldPaths': 'active', pageSize: 100 } });
+    const records = registry.status === 200 ? registry.body.documents || [] : [];
+    const ids = records.map((d) => d.name.split('/').at(-1));
+    const identity = ids.length ? await api.identity.post(`projects/${PROJECT}/accounts:lookup`, { localId: ids }, { ...REQUEST_OPTIONS, queryParams: { fields: 'users(customAttributes,disabled)' } }) : null;
+    const claims = (identity?.body?.users || []).map((u) => { try { return JSON.parse(u.customAttributes || '{}').admin === true; } catch { return false; } });
+    let token, claimAccounts = 0, claimCount = 0, claimsComplete = false;
+    const seen = new Set();
+    for (let page = 0; page < 1000; page++) {
+      const response = await api.identity.get(`projects/${PROJECT}/accounts:batchGet`, { ...REQUEST_OPTIONS, queryParams: { fields: 'users(customAttributes),nextPageToken', maxResults: 1000, ...(token ? { nextPageToken: token } : {}) } });
+      if (response.status !== 200 || !Array.isArray(response.body.users || [])) break;
+      for (const account of response.body.users || []) { claimAccounts++; try { if (JSON.parse(account.customAttributes || '{}').admin === true) claimCount++; } catch { /* malformed claim is not a role */ } }
+      token = response.body.nextPageToken;
+      if (!token) { claimsComplete = true; break; }
+      if (seen.has(token)) break;
+      seen.add(token);
+    }
+    const fields = census.body?.fields || {};
+    process.stdout.write(JSON.stringify({ checkedAt: new Date().toISOString(), readOnly: true,
+      savedCensus: { available: census.status === 200, generatedAt: fields.generatedAt?.timestampValue || null, total: fields.totalAccounts?.integerValue ?? null, registered: fields.registeredAccounts?.integerValue ?? null, guests: fields.guestAccounts?.integerValue ?? null },
+      protectedRegistry: { available: registry.status === 200, httpStatus: registry.status, records: records.length, active: records.filter((d) => d.fields?.active?.booleanValue === true).length, complete: !registry.body?.nextPageToken },
+      claimsOfRegisteredAdmins: { available: identity?.status === 200, checked: claims.length, adminClaim: claims.filter(Boolean).length },
+      projectCustomClaims: { complete: claimsComplete, accountsChecked: claimAccounts, withAdminClaim: claimsComplete ? claimCount : null },
+      limitation: 'Solo agregados administrativos; no muestra identificadores ni contenido privado de usuarios.' }, null, 2) + '\n');
+    return;
+  }
   if (args.includes('--help')) {
     process.stdout.write('Uso: node scripts/diagnose-ceo.mjs [--publish]\nSin --publish sólo lectura. --publish reemplaza exclusivamente el censo agregado privado del CEO. Proyecto fijo rostermax-60242; nunca muestra identidades.\n');
     return;

@@ -30,7 +30,7 @@ test('CEO separa cuentas reales de actividad voluntaria y conserva privacidad', 
   await expect(navigation.getByRole('button', { name: 'CEO', exact: true })).toHaveCount(0);
   const uid = await page.evaluate(async () => (await import('/src/lib/firebase.js')).auth.currentUser.uid);
   await seed(request, 'admin_stats/accounts', {
-    schemaVersion: { integerValue: '1' }, source: { stringValue: 'firebase-auth' }, projectId: { stringValue: 'rostermax-60242' },
+    schemaVersion: { integerValue: '1' }, source: { stringValue: 'firebase-auth' }, projectId: { stringValue: 'demo-rostermax' },
     totalAccounts: { integerValue: '150' }, registeredAccounts: { integerValue: '4' }, guestAccounts: { integerValue: '146' },
     googleAccounts: { integerValue: '4' }, disabledAccounts: { integerValue: '0' },
     createdLast7Days: { integerValue: '3' }, createdLast30Days: { integerValue: '10' },
@@ -53,6 +53,12 @@ test('CEO separa cuentas reales de actividad voluntaria y conserva privacidad', 
   await expect(audience.getByText('Activas medidas · 24 h', { exact: true }).locator('..')).toContainText('1');
   await expect(audience.getByText('Cuentas guardadas', { exact: true }).locator('..')).toContainText('4');
   await expect(audience).not.toContainText(uid);
+  // A bad-environment refresh must not erase the last confirmed census.
+  const saved = await (await request.get(`${DOCUMENTS}/${ROOT}/admin_stats/accounts`, { headers:{ Authorization:'Bearer owner' } })).json();
+  await seed(request, 'admin_stats/accounts', { ...saved.fields, projectId:{ stringValue:'invalid-other-environment' }, registeredAccounts:{ integerValue:'999' } });
+  await expect(audience.getByRole('alert')).toContainText('Conservamos el último resultado correcto');
+  await expect(audience.getByText('Cuentas guardadas', { exact:true }).locator('..')).toContainText('4');
+  await seed(request, 'admin_stats/accounts', saved.fields);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
   await page.screenshot({ path: testInfo.outputPath('ceo-mobile.png'), fullPage: true });
   // Revoking the private admin record removes the panel immediately.

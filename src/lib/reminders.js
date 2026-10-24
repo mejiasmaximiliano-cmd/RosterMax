@@ -12,8 +12,8 @@ export function getTransitionReminder(dateStr, config, leadDays = 1) {
   return {
     id: `${transition.date}-${transition.nextStatus}`,
     date: transition.date,
-    title: isGoingToRest ? `Tu franco comienza ${timing}` : `Tu subida es ${timing}`,
-    body: isGoingToRest
+    title: transition.unavailable ? `Tu ausencia comienza ${timing}` : isGoingToRest ? `Tu franco comienza ${timing}` : `Tu subida es ${timing}`,
+    body: transition.unavailable ? 'Revisa tu calendario privado. Esta ausencia no se cuenta como franco.' : isGoingToRest
       ? 'Revisa tus planes y pendientes para aprovechar el descanso.'
       : 'Revisa transporte, equipo y bitácora antes de volver al roster.',
   };
