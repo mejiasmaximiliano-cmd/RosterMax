@@ -73,7 +73,9 @@ async function addPlan(page, title) {
   await page.getByLabel('Fecha del plan').fill('2026-09-21');
   await page.getByRole('button', { name: 'Guardar plan', exact: true }).click();
   await expect(page.getByRole('button', { name: `Editar: ${title}`, exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name:'Guardar plan', exact:true })).toHaveCount(0);
+  // The submit button changes to Guardando… while the write is still active.
+  // Wait for the editor itself to close before navigating to another section.
+  await expect(page.getByLabel('¿Qué querés hacer?')).toHaveCount(0);
 }
 
 async function savedTitles(request, uid) {
