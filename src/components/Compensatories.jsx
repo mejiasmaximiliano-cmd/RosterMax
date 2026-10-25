@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { ArrowRight, Scale } from 'lucide-react';
 import Modal from './Modal';
 import DiscardChanges from './DiscardChanges';
@@ -33,7 +33,13 @@ export default function Compensatories({ user, theme, today, onConfirmed, onPend
   const card = `rounded-2xl border p-4 ${light ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-700'}`;
   const input = `ux-field mt-1 min-h-11 w-full min-w-0 rounded-xl border px-3 py-2 ${light ? 'bg-slate-50 border-slate-300' : 'bg-slate-950 border-slate-700'}`;
   const button = 'ux-button ux-secondary';
-  const start = (extra = {}) => guard.request(() => { setDraft(makeDraft(today, extra)); setShowForm(true); requestAnimationFrame(()=>{ markFormSaved(formRef.current); formRef.current?.scrollIntoView({block:'start'}); formRef.current?.querySelector('input,select')?.focus({preventScroll:true}); }); }, formRef.current || null);
+  useLayoutEffect(() => {
+    if (!showForm) return;
+    markFormSaved(formRef.current);
+    formRef.current?.scrollIntoView({block:'start'});
+    formRef.current?.querySelector('input,select')?.focus({preventScroll:true});
+  }, [showForm, draft.id]);
+  const start = (extra = {}) => guard.request(() => { setDraft(makeDraft(today, extra)); setShowForm(true); }, formRef.current || null);
   const save = async (event) => {
     event.preventDefault();
     if (await submit({ ...draft, debtId: draft.debtId || draft.id })) { setShowForm(false); setDraft(makeDraft(today)); }

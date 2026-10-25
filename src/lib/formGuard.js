@@ -36,7 +36,9 @@ export function useDiscardGuard() {
     if(formsInside(root).some(form=>form.getAttribute?.('aria-busy')==='true')) { setAction(null); setWaiting(true); return; }
     setWaiting(false);
     if (!containerChanged(root)) { next(); return; }
-    setAction(()=>()=>{ next(); requestAnimationFrame(()=>formsInside(root).forEach(form=>markFormSaved(form))); });
+    // Discard only the editor the user just confirmed. A delayed frame must
+    // never mark a different, newly opened draft as already saved.
+    setAction(()=>()=>{ formsInside(root).forEach(form=>markFormSaved(form)); next(); });
   };
   return { open:Boolean(action)||waiting, waiting, request, keep:()=>{setAction(null);setWaiting(false);}, discard:()=>{ const next=action; setAction(null); if(!waiting)next?.(); } };
 }

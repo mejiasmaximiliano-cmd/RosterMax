@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CalendarDays, CalendarPlus, Check, ChevronDown, Clock, Pencil, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { describeRestWindow, getRestPlanSummary, getTaskSummary, getUpcomingRestWindows, sortTasks, TASK_CATEGORIES, validateTask } from '../lib/planning.js';
 import { getStatusForDate, isRestAvailable, parseDateOnly, validateRosterConfig } from '../lib/roster.js';
@@ -40,6 +40,7 @@ function PlannerContent({ theme = 'dark', today, config, tasks = [], initialDate
   const guard = useDiscardGuard();
   const [draft, setDraft] = useState(() => makeDraft(initialDate));
   const [showForm, setShowForm] = useState(Boolean(initialDate));
+  const [draftRevision, setDraftRevision] = useState(0);
   const [filter, setFilter] = useState('upcoming');
   const [search, setSearch] = useState('');
   const [visibleCount, setVisibleCount] = useState(8);
@@ -67,11 +68,13 @@ function PlannerContent({ theme = 'dark', today, config, tasks = [], initialDate
 
   const updateDraft = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
   const chooseFilter = (value) => { setFilter(value); setVisibleCount(8); };
-  const focusForm = () => requestAnimationFrame(() => {
+  useLayoutEffect(() => {
+    if (!showForm) return;
     markFormSaved(formRef.current);
     formRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     titleRef.current?.focus({ preventScroll: true });
-  });
+  }, [showForm, draftRevision]);
+  const focusForm = () => setDraftRevision((revision) => revision + 1);
   const newPlan = (date) => {
     if (showForm) { guard.request(()=>{ setDraft(makeDraft(date)); setShowForm(true); setMessage(null); focusForm(); },formRef.current); return; }
     setDraft(makeDraft(date));

@@ -133,8 +133,21 @@ test('ediciones sin guardar: solo avisa si cambiaron, mantiene el texto y no con
   await nav.getByRole('button',{name:'Roster',exact:true}).click();
   await page.getByRole('button',{name:'Ver historial y registrar',exact:true}).click();
   const ledger=page.getByRole('dialog',{name:'Compensatorios',exact:true});
-  await ledger.getByRole('button',{name:'Registrar días pendientes',exact:true}).click();
+  // A delayed animation frame must not classify text entered after opening
+  // the editor as already saved. Force only this click while frames are held;
+  // restore before assertions/keyboard and exercise the actual discard flow.
+  await page.evaluate(()=>{
+    const original=window.requestAnimationFrame, callbacks=[];
+    window.uxHeldFrames={original,callbacks};
+    window.requestAnimationFrame=callback=>{callbacks.push(callback);return callbacks.length;};
+  });
+  await ledger.getByRole('button',{name:'Registrar días pendientes',exact:true}).click({force:true});
   await ledger.getByLabel('Cantidad de días').fill('3');
+  await page.evaluate(()=>{
+    const {original,callbacks}=window.uxHeldFrames;
+    window.requestAnimationFrame=original; delete window.uxHeldFrames;
+    callbacks.forEach(callback=>callback(performance.now()));
+  });
   await page.keyboard.press('Escape'); await expect(confirm).toBeVisible();
   await confirm.getByRole('button',{name:'Seguir editando',exact:true}).click();
   await expect(ledger.getByLabel('Cantidad de días')).toHaveValue('3');

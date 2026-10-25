@@ -69,7 +69,7 @@ function rememberTheme(uid, mode) { try { localStorage.setItem(themeKey(uid), mo
 
 const ONBOARDING_DISMISS_KEY = 'rostermax:onboarding-v2-dismissed';
 const PUBLIC_APP_URL = appEnvironment?.publicAppUrl || '';
-const APP_VERSION = 'beta-0.9.1';
+const APP_VERSION = 'beta-0.9.2';
 
 const EXCEPTION_LABELS = {
   vacation: 'Vacaciones',
