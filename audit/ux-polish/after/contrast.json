@@ -1,0 +1,150 @@
+[
+  {
+    "theme": "light",
+    "destructive": {
+      "foreground": "rgb(190, 18, 60)",
+      "background": "rgb(255, 241, 242)",
+      "ratio": 5.721379238070055
+    },
+    "samples": [
+      {
+        "selector": ".ux-primary",
+        "foreground": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "background": [
+          4,
+          120,
+          87,
+          255
+        ],
+        "ratio": 5.483924052498799
+      },
+      {
+        "selector": ".ux-secondary",
+        "foreground": [
+          51,
+          65,
+          85,
+          255
+        ],
+        "background": [
+          248,
+          250,
+          252,
+          255
+        ],
+        "ratio": 9.896764973632585
+      },
+      {
+        "selector": ".ux-sync",
+        "foreground": [
+          71,
+          85,
+          105,
+          255
+        ],
+        "background": [
+          248,
+          250,
+          252,
+          255
+        ],
+        "ratio": 7.242510935504382
+      },
+      {
+        "selector": "[aria-label=\"Calendario de roster\"] button[aria-current=\"date\"]",
+        "foreground": [
+          0,
+          96,
+          69,
+          255
+        ],
+        "background": [
+          236,
+          253,
+          245,
+          255
+        ],
+        "ratio": 7.225299921426654
+      }
+    ]
+  },
+  {
+    "theme": "dark",
+    "destructive": {
+      "foreground": "rgb(254, 205, 211)",
+      "background": "rgb(76, 5, 25)",
+      "ratio": 11.084749868467377
+    },
+    "samples": [
+      {
+        "selector": ".ux-primary",
+        "foreground": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "background": [
+          4,
+          120,
+          87,
+          255
+        ],
+        "ratio": 5.483924052498799
+      },
+      {
+        "selector": ".ux-secondary",
+        "foreground": [
+          226,
+          232,
+          240,
+          255
+        ],
+        "background": [
+          30,
+          41,
+          59,
+          255
+        ],
+        "ratio": 11.86643256027928
+      },
+      {
+        "selector": ".ux-sync",
+        "foreground": [
+          203,
+          213,
+          225,
+          255
+        ],
+        "background": [
+          2,
+          6,
+          24,
+          255
+        ],
+        "ratio": 13.576473218291989
+      },
+      {
+        "selector": "[aria-label=\"Calendario de roster\"] button[aria-current=\"date\"]",
+        "foreground": [
+          164,
+          244,
+          207,
+          255
+        ],
+        "background": [
+          9,
+          42,
+          50,
+          255
+        ],
+        "ratio": 11.82249238688031
+      }
+    ]
+  }
+]

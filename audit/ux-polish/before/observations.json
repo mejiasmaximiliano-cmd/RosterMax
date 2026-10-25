@@ -1,0 +1,19 @@
+{
+  "environment": "LOCAL EMULATORS, fictitious data, same saved test account for before/after; not production",
+  "date": "2026-10-24",
+  "uidFictitious": "HQkUQkAkkwFPNPiMRTWyWNM6EbsR",
+  "observations": [
+    {
+      "theme": "light",
+      "transitionTop": 1291,
+      "calendarHeight": 749,
+      "navBackground": "oklab(0.999994 0.0000455678 0.0000200868 / 0.9)"
+    },
+    {
+      "theme": "dark",
+      "transitionTop": 1291,
+      "calendarHeight": 749,
+      "navBackground": "oklab(0.129 -0.0038832 -0.0418201 / 0.9)"
+    }
+  ]
+}

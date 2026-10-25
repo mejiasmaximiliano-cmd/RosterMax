@@ -1,0 +1,19 @@
+{
+  "environment": "LOCAL EMULATORS, fictitious data, same saved test account for before/after; not production",
+  "date": "2026-10-24",
+  "uidFictitious": "HQkUQkAkkwFPNPiMRTWyWNM6EbsR",
+  "observations": [
+    {
+      "theme": "light",
+      "transitionTop": 277,
+      "calendarHeight": 874,
+      "navBackground": "rgb(255, 255, 255)"
+    },
+    {
+      "theme": "dark",
+      "transitionTop": 277,
+      "calendarHeight": 874,
+      "navBackground": "rgb(2, 6, 23)"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "sourceCommit": "bae43e95c2967f6834fc3bdae5aba4c3ec0f79a7",
+  "publishedFrontendCommit": "e8e8f8612a785547701c9fb58658e2b859ead0c9",
+  "applicationSourceDiff": "No differences in src/public/scripts/config/api/build configuration/rules. Verification commit changes only two E2E waits; public alias intentionally retains the published source commit.",
+  "scope": "Local Windows Chrome and loopback demo-rostermax emulators. Fictitious writes only; not physical-phone or authenticated-production verification.",
+  "commands": {
+    "npm run lint": { "exitCode": 0 },
+    "npm run test:all": {
+      "exitCode": 0,
+      "logicAndRules": { "total": 155, "passed": 155, "failed": 0, "cancelled": 0, "skipped": 0, "todo": 0, "durationMs": 4064.1991, "emulatorRulesIncluded": 19 },
+      "interface": { "total": 36, "passed": 36, "failed": 0, "skipped": 0, "retries": 0, "reportedDuration": "3.8m" }
+    },
+    "node scripts/build-production.mjs --production": { "exitCode": 0, "localBuild": "699bb592fd112ae55e3e", "builtAt": "2026-10-25T03:09:35.826Z", "warning": "Main chunk 1077.29 kB / 320.81 kB gzip exceeds 500 kB recommendation; no speed improvement claim." },
+    "npm audit --omit=dev": { "exitCode": 0, "vulnerabilities": 0 },
+    "git diff --check": { "exitCode": 0 }
+  },
+  "precedingInterruptedStart": { "passed": 136, "cancelled": 19, "reason": "Firestore not yet listening: ECONNREFUSED. Services checked before final complete run; this attempt was not a pass." },
+  "delayedFrameRegression": { "previousBehavior": "1 expected failure: draft closed without confirmation after a late baseline reset", "correctedBehavior": "1 passed (11.8s), then included in the final full suite", "scope": "Controlled animation-frame timing, local demo data; no production changes for reproduction." },
+  "remainingPhysicalChecks": ["Google OAuth on owner's phone", "installed PWA update on physical phone", "physical keyboard and safe-area behavior", "two physical devices and external Calendar delivery"],
+  "research": "No real-user research performed. See docs/UX_PILOT.md."
+}
